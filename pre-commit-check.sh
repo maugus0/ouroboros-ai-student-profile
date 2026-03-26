@@ -76,7 +76,7 @@ fi
 
 echo ""
 echo "5. Running tests..."
-if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-token pytest tests/ -v --tb=short > /dev/null 2>&1; then
+if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v --tb=short > /dev/null 2>&1; then
     success "Tests passed"
 else
     error "Tests failed"

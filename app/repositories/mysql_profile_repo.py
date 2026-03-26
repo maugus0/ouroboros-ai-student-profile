@@ -5,7 +5,7 @@ from typing import Any
 
 from app.core.logging import get_logger
 from app.repositories.mysql_base import MySQLBaseRepository
-from app.utils.helpers import generate_uuid, get_current_time_iso
+from app.utils.helpers import generate_uuid
 
 logger = get_logger(__name__)
 
@@ -92,8 +92,12 @@ class ProfileRepository(MySQLBaseRepository):
             return 0
 
         json_fields = {
-            "profile_json", "confidence_map", "evidence_map",
-            "contradiction_flags", "missing_critical_fields", "clarification_queue",
+            "profile_json",
+            "confidence_map",
+            "evidence_map",
+            "contradiction_flags",
+            "missing_critical_fields",
+            "clarification_queue",
         }
 
         set_clauses = []
