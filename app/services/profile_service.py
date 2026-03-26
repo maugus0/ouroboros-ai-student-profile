@@ -149,8 +149,12 @@ class ProfileService:
     def _deserialize_json_fields(row: dict) -> dict:
         """Parse JSON string columns back into Python objects."""
         json_keys = [
-            "profile_json", "confidence_map", "evidence_map",
-            "contradiction_flags", "missing_critical_fields", "clarification_queue",
+            "profile_json",
+            "confidence_map",
+            "evidence_map",
+            "contradiction_flags",
+            "missing_critical_fields",
+            "clarification_queue",
         ]
         for key in json_keys:
             val = row.get(key)

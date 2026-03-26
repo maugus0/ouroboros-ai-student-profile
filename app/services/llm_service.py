@@ -1,7 +1,8 @@
 """LLM service with primary/fallback provider and structured extraction."""
 
+import json
 import time
-from typing import Optional
+from typing import Any, Optional
 
 from app.config import settings
 from app.core.logging import get_logger
@@ -16,7 +17,7 @@ logger = get_logger(__name__)
 
 
 class LLMService:
-    """Orchestrates LLM calls with primary → fallback provider logic."""
+    """Orchestrates LLM calls with primary -> fallback provider logic."""
 
     async def extract_profile(
         self, document_text: str, target_degree_hint: Optional[str] = None
@@ -25,11 +26,19 @@ class LLMService:
 
         Tries OpenAI first; falls back to Anthropic on failure.
         """
-        system_prompt = get_profile_extraction_prompt()
+        runtime_context: dict[str, Any] = {
+            "document_metadata": {
+                "text_length": len(document_text),
+                "has_target_hint": target_degree_hint is not None,
+            },
+        }
+        if target_degree_hint:
+            runtime_context["user_provided_target_degree"] = target_degree_hint
+
+        system_prompt = get_profile_extraction_prompt(context=runtime_context, fmt="text")
         user_content = self._build_extraction_input(document_text, target_degree_hint)
 
         start = time.perf_counter()
-        fallback_used = False
         fallback_reason: Optional[str] = None
 
         # Primary: OpenAI
@@ -54,7 +63,6 @@ class LLMService:
         # Fallback: Anthropic
         try:
             if settings.ANTHROPIC_API_KEY:
-                fallback_used = True
                 result = await call_anthropic(system_prompt, user_content)
                 profile = ExtractedProfile(**result["content"])
                 latency = int((time.perf_counter() - start) * 1000)
@@ -70,18 +78,23 @@ class LLMService:
                 )
         except Exception as exc:
             logger.error("anthropic_extraction_failed", error=str(exc))
-            raise LLMExtractionError(
-                f"Both LLM providers failed. Last error: {exc}"
-            ) from exc
+            raise LLMExtractionError(f"Both LLM providers failed. Last error: {exc}") from exc
 
         raise LLMExtractionError("No LLM API key configured")
 
     async def run_gap_analysis(self, profile_json: dict, target_degree: str) -> dict:
         """Run a gap analysis on an extracted profile."""
-        system_prompt = get_gap_analysis_prompt()
+        runtime_context: dict[str, Any] = {
+            "target_degree": target_degree,
+            "profile_summary": {
+                "has_gpa": profile_json.get("gpa_highest") is not None,
+                "education_count": len(profile_json.get("education", [])),
+                "research_count": len(profile_json.get("research_experience", [])),
+            },
+        }
+        system_prompt = get_gap_analysis_prompt(context=runtime_context, fmt="text")
         user_content = (
-            f"TARGET DEGREE: {target_degree}\n\n"
-            f"STUDENT PROFILE:\n{self._dict_to_text(profile_json)}"
+            f"TARGET DEGREE: {target_degree}\n\n" f"STUDENT PROFILE:\n{json.dumps(profile_json, indent=2, default=str)}"
         )
 
         try:
@@ -110,9 +123,3 @@ class LLMService:
             parts.append(f"USER-PROVIDED TARGET DEGREE: {target_degree_hint}")
         parts.append(f"DOCUMENT TEXT:\n{text}")
         return "\n\n".join(parts)
-
-    @staticmethod
-    def _dict_to_text(d: dict) -> str:
-        import json
-
-        return json.dumps(d, indent=2, default=str)

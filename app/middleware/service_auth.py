@@ -1,6 +1,6 @@
 """FastAPI dependency for inter-service X-Service-Token validation."""
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import HTTPException, Request, status
 
 from app.config import settings
 from app.core.logging import get_logger
