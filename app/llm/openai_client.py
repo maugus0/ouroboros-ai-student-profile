@@ -15,7 +15,7 @@ _client: AsyncOpenAI | None = None
 
 def get_openai_client() -> AsyncOpenAI:
     """Return a lazily-initialised AsyncOpenAI client."""
-    global _client
+    global _client  # pylint: disable=global-statement
     if _client is None:
         _client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
     return _client
@@ -53,6 +53,8 @@ async def call_openai(
     )
 
     raw = response.choices[0].message.content
+    if raw is None:
+        raise ValueError("OpenAI returned empty message content")
     usage = response.usage
 
     logger.info(

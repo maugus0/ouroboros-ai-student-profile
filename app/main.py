@@ -11,14 +11,14 @@ from app.api import documents, health, profiles
 from app.config import APP_VERSION, settings
 from app.core.logging import get_logger, setup_logging
 from app.middleware.logging_middleware import LoggingMiddleware
-from app.repositories.db_pool import close_pool, create_pool
+from app.repositories.db_pool import DatabasePoolConfig, close_pool, create_pool
 from app.utils.exceptions import StudentProfileBaseError
 
 load_dotenv()
 
 
 @asynccontextmanager
-async def lifespan(application: FastAPI):
+async def lifespan(_application: FastAPI):
     """Application startup and shutdown lifecycle."""
     setup_logging(log_level=settings.LOG_LEVEL)
     logger = get_logger("startup")
@@ -28,14 +28,16 @@ async def lifespan(application: FastAPI):
     if not settings.ALLOW_DB_FAILURE:
         try:
             await create_pool(
-                host=settings.get_db_host(),
-                port=settings.get_db_port(),
-                db=settings.get_db_name(),
-                user=settings.get_db_user(),
-                password=settings.get_db_password(),
-                pool_size=settings.DB_POOL_SIZE,
+                DatabasePoolConfig(
+                    host=settings.get_db_host(),
+                    port=settings.get_db_port(),
+                    db=settings.get_db_name(),
+                    user=settings.get_db_user(),
+                    password=settings.get_db_password(),
+                    pool_size=settings.DB_POOL_SIZE,
+                )
             )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("database_connection_failed", error=str(exc))
             raise
     else:
@@ -64,7 +66,7 @@ app = FastAPI(
 
 
 @app.exception_handler(StudentProfileBaseError)
-async def student_profile_error_handler(request: Request, exc: StudentProfileBaseError):
+async def student_profile_error_handler(_request: Request, exc: StudentProfileBaseError):
     return JSONResponse(
         status_code=exc.status_code,
         content={"success": False, "message": exc.message},
@@ -72,7 +74,7 @@ async def student_profile_error_handler(request: Request, exc: StudentProfileBas
 
 
 @app.exception_handler(RuntimeError)
-async def runtime_error_handler(request: Request, exc: RuntimeError):
+async def runtime_error_handler(_request: Request, exc: RuntimeError):
     return JSONResponse(
         status_code=503,
         content={"success": False, "message": str(exc)},
@@ -107,7 +109,7 @@ def custom_openapi():
     return schema
 
 
-app.openapi = custom_openapi
+app.openapi = custom_openapi  # type: ignore[method-assign]
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Document text extraction from PDF, DOCX, and image files."""
 
 import base64
+import binascii
 import hashlib
 import os
 import tempfile
@@ -28,7 +29,7 @@ class DocumentParser:
 
         try:
             raw_bytes = base64.b64decode(file_content_base64)
-        except Exception as exc:
+        except (binascii.Error, ValueError) as exc:
             raise DocumentParsingError(f"Invalid base64 content: {exc}") from exc
 
         file_hash = hashlib.sha256(raw_bytes).hexdigest()
@@ -74,7 +75,7 @@ class DocumentParser:
 
     @staticmethod
     def _extract_pdf(path: str) -> tuple[str, str, bool]:
-        import pdfplumber
+        import pdfplumber  # pylint: disable=import-outside-toplevel
 
         pages = []
         with pdfplumber.open(path) as pdf:
@@ -93,7 +94,7 @@ class DocumentParser:
 
     @staticmethod
     def _extract_docx(path: str) -> tuple[str, str, bool]:
-        from docx import Document
+        from docx import Document  # pylint: disable=import-outside-toplevel
 
         doc = Document(path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
@@ -107,8 +108,8 @@ class DocumentParser:
     @staticmethod
     def _ocr_fallback(path: str) -> tuple[str, bool]:
         try:
-            import pytesseract
-            from PIL import Image
+            import pytesseract  # pylint: disable=import-outside-toplevel
+            from PIL import Image  # pylint: disable=import-outside-toplevel
 
             if settings.TESSERACT_PATH:
                 pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_PATH
@@ -116,6 +117,6 @@ class DocumentParser:
             img = Image.open(path)
             text = pytesseract.image_to_string(img, lang=settings.OCR_LANGUAGE)
             return text.strip(), True
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("ocr_fallback_failed", error=str(exc))
             return "", False

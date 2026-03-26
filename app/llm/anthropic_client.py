@@ -15,7 +15,7 @@ _client: AsyncAnthropic | None = None
 
 def get_anthropic_client() -> AsyncAnthropic:
     """Return a lazily-initialised AsyncAnthropic client."""
-    global _client
+    global _client  # pylint: disable=global-statement
     if _client is None:
         _client = AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
     return _client
@@ -46,7 +46,10 @@ async def call_anthropic(
         messages=[{"role": "user", "content": user_content}],
     )
 
-    raw = response.content[0].text
+    first_block = response.content[0]
+    raw = getattr(first_block, "text", None)
+    if raw is None:
+        raise ValueError(f"Expected text block from Anthropic, got {type(first_block).__name__}")
     usage = response.usage
 
     logger.info(
