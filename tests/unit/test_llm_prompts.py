@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from app.llm.prompts import (
     get_gap_analysis_prompt,
     get_profile_extraction_prompt,
@@ -57,3 +59,12 @@ def test_gap_analysis_with_context():
 
     parsed = json.loads(prompt)
     assert parsed["runtime_context"]["target_degree"] == "master"
+
+
+@pytest.mark.parametrize(
+    "bad_fmt",
+    ["JSON", "txt", "markdown", ""],
+)
+def test_invalid_prompt_format_raises(bad_fmt):
+    with pytest.raises(ValueError, match="Unsupported prompt format"):
+        get_profile_extraction_prompt(fmt=bad_fmt)

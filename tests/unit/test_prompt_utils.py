@@ -62,6 +62,15 @@ def test_merge_without_context_has_no_runtime_key():
     assert "agent_identity" in prompt
 
 
+def test_merge_empty_dict_still_adds_runtime_context():
+    """Explicit {} must still produce runtime_context (truthy check would skip it)."""
+    template = load_prompt_template("profile_extraction_v1.json")
+    prompt = merge_runtime_context(template, {})
+
+    assert "runtime_context" in prompt
+    assert prompt["runtime_context"] == {}
+
+
 def test_build_prompt_json_returns_valid_json():
     context = {"test_key": "test_value"}
     result = build_prompt_json("profile_extraction_v1.json", context)

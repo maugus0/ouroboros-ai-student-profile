@@ -38,11 +38,13 @@ def merge_runtime_context(
     """Merge runtime context into the base prompt structure.
 
     Returns a new dict containing the base template keys plus a
-    ``runtime_context`` section when *context* is provided.
+    ``runtime_context`` key when *context* is not ``None`` (including
+    when it is an empty dict, so callers can explicitly signal
+    "context was supplied but is empty").
     """
     prompt = dict(template.get("prompt_template", {}).get("base", {}))
 
-    if context:
+    if context is not None:
         prompt["runtime_context"] = _clean_context(context)
 
     return prompt
