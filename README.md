@@ -455,12 +455,13 @@ isort app/ tests/
 
 # Lint
 flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
+pylint app/ tests/
 
 # Type check
 mypy app/ --ignore-missing-imports --no-strict-optional
 
 # Run tests
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test pytest tests/ -v
+ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
 ```
 
 ### Pre-Commit Script
@@ -470,7 +471,7 @@ chmod +x pre-commit-check.sh
 ./pre-commit-check.sh
 ```
 
-Runs Black, isort, flake8, syntax validation, tests, and mypy in sequence.
+Runs Black, isort, flake8, pylint, syntax validation, pytest, and mypy in sequence. Pylint and mypy are blocking (the workflow matches this).
 
 ---
 
@@ -479,13 +480,13 @@ Runs Black, isort, flake8, syntax validation, tests, and mypy in sequence.
 ### Run All Tests
 
 ```bash
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test pytest tests/ -v
+ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
 ```
 
 ### Run with Coverage
 
 ```bash
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test pytest tests/ --cov=app --cov-report=html -v
+ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ --cov=app --cov-report=html -v
 open htmlcov/index.html
 ```
 
@@ -504,29 +505,28 @@ tests/
 │   ├── test_profile_service.py  # Profile orchestration
 │   ├── test_prompt_utils.py     # Prompt template loading & context merge
 │   └── test_llm_prompts.py      # Prompt generation (JSON + text formats)
-└── integration/
-    ├── test_parse_flow.py       # End-to-end parse flow
-    └── test_api_endpoints.py    # API integration tests
 ```
 
 ---
 
 ## CI/CD Pipeline
 
-**Workflow**: `.github/workflows/deploy.yml`
+**Workflow**: `.github/workflows/deploy.yml` (named **OuroborosAI Student Profile CI/CD Pipeline** in GitHub)
 
 **Trigger**: Pull requests to `main` or `develop`
+
+Shared lint rules live in `.pylintrc` (line length, a few docstring / design relaxations, similarity thresholds).
 
 ### Pipeline Stages
 
 | Stage | Description |
 |-------|-------------|
 | **Format** | Black + isort validation |
-| **Lint** | flake8 + pylint code quality checks |
-| **Unit Tests** | pytest with JUnit XML output |
-| **Type Check** | mypy static type analysis (after format + lint) |
-| **Integration Tests** | pytest with coverage HTML + XML (after format + lint) |
-| **Security Audit** | Bandit static security analysis (after format + lint) |
+| **Lint** | **flake8** + **pylint** (both blocking) |
+| **Unit Tests** | `pytest tests/unit/` with JUnit XML artifact |
+| **Type Check** | **mypy** — blocking (after format + lint) |
+| **Tests + Coverage** | Full `pytest tests/` with HTML + Cobertura XML (after format + lint) |
+| **Security Audit** | Bandit (JSON artifact; console step uses `|| true` so findings are visible without failing the job) |
 | **Docker Build** | Verify image builds — no push (after all above) |
 | **Summary** | Markdown table of all job results |
 
@@ -536,8 +536,9 @@ tests/
 black --check app/ tests/
 isort --check-only app/ tests/
 flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
-mypy app/ --ignore-missing-imports --no-strict-optional || true
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test pytest tests/ -v
+pylint app/ tests/
+mypy app/ --ignore-missing-imports --no-strict-optional
+ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
 bandit -r app/ || true
 docker build -t student-profile-agent .
 ```
@@ -623,7 +624,7 @@ ouroboros-ai-student-profile/
 ├── scripts/
 │   ├── run_migrations.py
 │   └── seed_test_data.py
-├── tests/                       # Unit and integration tests
+├── tests/                       # Unit tests + shared fixtures
 ├── .github/workflows/
 │   └── deploy.yml               # CI/CD pipeline
 ├── requirements.txt
@@ -632,6 +633,7 @@ ouroboros-ai-student-profile/
 ├── docker-compose.yml
 ├── pyproject.toml
 ├── pytest.ini
+├── .pylintrc
 ├── .flake8
 ├── .env.example
 ├── start.sh

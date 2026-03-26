@@ -1,0 +1,19 @@
+[MAIN]
+py-version = 3.11
+
+[BASIC]
+good-names=_pool,_client,i,j,k,_,exc,fd,Run,id
+
+[FORMAT]
+max-line-length = 120
+
+[DESIGN]
+max-args = 8
+max-positional-arguments = 8
+
+[SIMILARITIES]
+min-similarity-lines = 20
+ignore-imports = yes
+
+[MESSAGES CONTROL]
+disable = C0111, R0903

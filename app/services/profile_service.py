@@ -34,6 +34,12 @@ class ProfileService:
     ) -> dict[str, Any]:
         """Full pipeline: decode → extract text → LLM parse → store profile + document."""
         overall_start = time.perf_counter()
+        logger.info(
+            "profile_parse_started",
+            user_id=user_id,
+            file_name=file_name,
+            document_type=document_type,
+        )
 
         # 1. Extract text from document
         extraction = await self.parser.extract_text(file_content_base64, file_name)

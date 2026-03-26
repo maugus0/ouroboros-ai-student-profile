@@ -56,7 +56,7 @@ class LLMService:
                     latency_ms=latency,
                     fallback_used=False,
                 )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("openai_extraction_failed", error=str(exc))
             fallback_reason = f"OpenAI failed: {exc}"
 
@@ -76,7 +76,7 @@ class LLMService:
                     fallback_used=True,
                     fallback_reason=fallback_reason,
                 )
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("anthropic_extraction_failed", error=str(exc))
             raise LLMExtractionError(f"Both LLM providers failed. Last error: {exc}") from exc
 
@@ -94,21 +94,21 @@ class LLMService:
         }
         system_prompt = get_gap_analysis_prompt(context=runtime_context, fmt="text")
         user_content = (
-            f"TARGET DEGREE: {target_degree}\n\n" f"STUDENT PROFILE:\n{json.dumps(profile_json, indent=2, default=str)}"
+            f"TARGET DEGREE: {target_degree}\n\nSTUDENT PROFILE:\n" f"{json.dumps(profile_json, indent=2, default=str)}"
         )
 
         try:
             if settings.OPENAI_API_KEY:
                 result = await call_openai(system_prompt, user_content)
                 return result["content"]
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.warning("openai_gap_analysis_failed", error=str(exc))
 
         try:
             if settings.ANTHROPIC_API_KEY:
                 result = await call_anthropic(system_prompt, user_content)
                 return result["content"]
-        except Exception as exc:
+        except Exception as exc:  # pylint: disable=broad-exception-caught
             logger.error("anthropic_gap_analysis_failed", error=str(exc))
             raise LLMExtractionError(f"Gap analysis failed: {exc}") from exc
 

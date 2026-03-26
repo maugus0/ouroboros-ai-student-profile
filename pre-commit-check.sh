@@ -59,14 +59,24 @@ fi
 echo ""
 echo "3. Running linting (flake8)..."
 if flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501 > /dev/null 2>&1; then
-    success "Linting passed"
+    success "Linting passed (flake8)"
 else
-    error "Linting failed"
+    error "Linting failed (flake8)"
     exit 1
 fi
 
 echo ""
-echo "4. Validating Python syntax..."
+echo "4. Running pylint..."
+if pylint app/ tests/ > /dev/null 2>&1; then
+    success "Linting passed (pylint)"
+else
+    error "Linting failed (pylint)"
+    pylint app/ tests/
+    exit 1
+fi
+
+echo ""
+echo "5. Validating Python syntax..."
 if "${PYTHON_CMD}" -m py_compile app/main.py app/config.py > /dev/null 2>&1; then
     success "Syntax validation passed"
 else
@@ -75,20 +85,23 @@ else
 fi
 
 echo ""
-echo "5. Running tests..."
+echo "6. Running tests..."
 if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v --tb=short > /dev/null 2>&1; then
     success "Tests passed"
 else
     error "Tests failed"
+    ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v --tb=short
     exit 1
 fi
 
 echo ""
-echo "6. Running type checking (mypy)..."
+echo "7. Running type checking (mypy)..."
 if mypy app/ --ignore-missing-imports --no-strict-optional > /dev/null 2>&1; then
     success "Type checking passed"
 else
-    warning "Type checking completed with warnings"
+    error "Type checking failed (mypy)"
+    mypy app/ --ignore-missing-imports --no-strict-optional
+    exit 1
 fi
 
 echo ""

@@ -38,9 +38,7 @@ class FieldRepository(MySQLBaseRepository):
     async def get_fields_by_profile(self, profile_id: str, category: str | None = None) -> list[dict[str, Any]]:
         """Retrieve fields for a profile, optionally filtered by category."""
         if category:
-            query = (
-                "SELECT * FROM profile_fields " "WHERE profile_id = %s AND field_category = %s " "ORDER BY field_name"
-            )
+            query = "SELECT * FROM profile_fields WHERE profile_id = %s AND field_category = %s ORDER BY field_name"
             return await self.execute_query(query, (profile_id, category))
 
         query = "SELECT * FROM profile_fields WHERE profile_id = %s ORDER BY field_category, field_name"
