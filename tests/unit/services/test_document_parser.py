@@ -20,3 +20,11 @@ async def test_unsupported_extension_raises():
     content = base64.b64encode(b"dummy content").decode()
     with pytest.raises(Exception, match="Unsupported file extension"):
         await parser.extract_text(content, "test.xyz")
+
+
+@pytest.mark.asyncio
+async def test_image_extension_rejected_in_mvp_scope():
+    parser = DocumentParser()
+    content = base64.b64encode(b"dummy content").decode()
+    with pytest.raises(Exception, match="Unsupported file extension"):
+        await parser.extract_text(content, "test.jpg")

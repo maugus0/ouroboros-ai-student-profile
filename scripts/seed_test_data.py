@@ -95,7 +95,7 @@ def seed():
                 json.dumps(profile["profile_json"]),
             ),
         )
-        print(f"  Seeded: {profile['full_name']} ({pid})")
+        print(f"  Seeded profile id: {pid}")
 
     conn.commit()
     cursor.close()
