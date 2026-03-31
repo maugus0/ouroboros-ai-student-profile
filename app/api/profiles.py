@@ -85,11 +85,66 @@ async def update_profile(profile_id: str, body: ProfileUpdate):
     return StandardResponse(message="Profile updated", data=profile)
 
 
+@router.put("/{profile_id}")
+async def replace_profile(profile_id: str, body: ProfileUpdate):
+    """Update profile fields (idempotent full-update style endpoint)."""
+    updates = body.model_dump(exclude_unset=True)
+    profile = await _profile_service.update_profile(profile_id, updates)
+    return StandardResponse(message="Profile updated", data=profile)
+
+
+@router.get("/{profile_id}/skills")
+async def get_profile_skills(profile_id: str):
+    """Retrieve normalized skills extracted for a profile."""
+    result = await _profile_service.get_profile_skills(profile_id)
+    return StandardResponse(data=result)
+
+
+@router.get("/{profile_id}/gaps")
+async def get_profile_gaps(profile_id: str):
+    """Retrieve the latest stored gap-analysis snapshot for a profile."""
+    result = await _gap_service.get_latest_analysis(profile_id)
+    return StandardResponse(data=result)
+
+
 @router.post("/{profile_id}/gap-analysis")
 async def run_gap_analysis(profile_id: str):
     """Trigger a gap analysis on an existing profile."""
     result = await _gap_service.analyze(profile_id)
     return StandardResponse(data=result)
+
+
+@router.get("/{profile_id}/clarifications")
+async def get_profile_clarifications(profile_id: str):
+    """Return unresolved clarifications and readiness state for a profile."""
+    result = await _profile_service.get_clarifications(profile_id)
+    return StandardResponse(data=result)
+
+
+@router.post("/{profile_id}/clarifications")
+async def submit_profile_clarifications(profile_id: str, body: ClarificationSubmitRequest):
+    """Apply clarification answers and update profile readiness state."""
+    answers = [item.model_dump() for item in body.answers]
+    result = await _profile_service.submit_clarifications(profile_id, answers)
+    return StandardResponse(message="Clarifications submitted", data=result)
+
+
+@router.post("/{profile_id}/gap-analysis/jobs")
+async def create_gap_analysis_job(profile_id: str, background_tasks: BackgroundTasks):
+    """Create async gap-analysis job; queued jobs are processed in background."""
+    job = await _gap_service.create_gap_job(profile_id)
+    if job["status"] == "queued":
+        background_tasks.add_task(_gap_service.process_gap_job, job["job_id"], profile_id)
+    return StandardResponse(message="Gap analysis job created", data=job)
+
+
+@router.get("/gap-analysis/jobs/{job_id}")
+async def get_gap_analysis_job(job_id: str):
+    """Get async gap-analysis job status and result snapshot."""
+    job = await _gap_service.get_gap_job(job_id)
+    return StandardResponse(data=job)
+
+
 async def _read_upload_bytes(upload_file: UploadFile) -> bytes:
     """Read an uploaded file in chunks and enforce size limits."""
     max_bytes = settings.MAX_FILE_SIZE_MB * 1024 * 1024
