@@ -60,11 +60,14 @@ The Student Profile Agent is a critical microservice in the Ouroboros AI platfor
 │                                                      │
 │  ┌─────────────────────────────────────────────┐     │
 │  │  API Layer (FastAPI)                        │     │
-│  │  POST /profiles/parse                       │     │
-│  │  GET  /profiles/{id}                        │     │
-│  │  GET  /profiles (paginated)                 │     │
-│  │  PATCH /profiles/{id}                       │     │
-│  │  POST /profiles/{id}/gap-analysis           │     │
+│  │  POST /api/v1/profiles/parse                │     │
+│  │  POST /api/v1/profiles/parse-upload         │     │
+│  │  GET  /api/v1/profiles/{profile_id}         │     │
+│  │  GET  /api/v1/profiles (paginated)          │     │
+│  │  PUT  /api/v1/profiles/{profile_id}         │     │
+│  │  GET  /api/v1/profiles/{profile_id}/skills  │     │
+│  │  GET  /api/v1/profiles/{profile_id}/gaps    │     │
+│  │  POST /api/v1/profiles/{profile_id}/gap-analysis │  │
 │  │  GET  /documents/{id}                       │     │
 │  └─────────────────────┬───────────────────────┘     │
 │                        │                             │
@@ -80,7 +83,7 @@ The Student Profile Agent is a critical microservice in the Ouroboros AI platfor
 │  │  Repository Layer (Raw SQL)                 │     │
 │  │  ProfileRepository                          │     │
 │  │  DocumentRepository                         │     │
-│  │  FieldRepository                            │     │
+│  │  ProfileNormalizedRepository                │     │
 │  └─────────────────────────────────────────────┘     │
 └──────────────┬───────────────────────────────────────┘
                │
@@ -117,6 +120,8 @@ The Student Profile Agent is a critical microservice in the Ouroboros AI platfor
 - **Personal data**: Name, email, phone, nationality, DOB
 - **Academic history**: Education entries with GPA/scale/achievements
 - **Target degree detection**: Inference with confidence scoring
+- **Clarification workflow**: Deterministic checks generate a clarification queue for unresolved critical fields
+- **Decision trace**: ReAct-style `react_decision_trace` captures accept/clarify reasoning per critical field
 - **Work experience**: Company, role, dates, skills used
 - **Research experience**: Publications, projects, venues
 - **Skills taxonomy**: Technical skills, languages, certifications
@@ -135,14 +140,14 @@ The Student Profile Agent is a critical microservice in the Ouroboros AI platfor
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Python | 3.11+ | Runtime |
-| MySQL | 8.0+ | Database |
-| OpenAI API Key | — | Primary LLM provider |
-| Anthropic API Key | — | Fallback LLM provider (optional but recommended) |
-| Tesseract OCR | 4.0+ | Scanned document processing (optional) |
-| Docker | 24.0+ | Containerised deployment (optional) |
+| Tool              | Version | Purpose                                          |
+| ----------------- | ------- | ------------------------------------------------ |
+| Python            | 3.11+   | Runtime                                          |
+| MySQL             | 8.0+    | Database                                         |
+| OpenAI API Key    | —       | Primary LLM provider                             |
+| Anthropic API Key | —       | Fallback LLM provider (optional but recommended) |
+| Tesseract OCR     | 4.0+    | Scanned document processing (optional)           |
+| Docker            | 24.0+   | Containerised deployment (optional)              |
 
 ---
 
@@ -159,7 +164,7 @@ python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 
 # Install dependencies
-pip install -r requirements-dev.txt
+uv sync --extra dev
 ```
 
 ### 2. Configure Environment
@@ -233,7 +238,13 @@ python scripts/seed_test_data.py
 
 ```bash
 curl http://localhost:8001/health
-# {"status":"healthy","version":"0.1.0","database":"not_connected"}
+# {"status":"healthy","version":"0.1.0","database":"connected"}
+```
+
+If the database is unavailable, health returns degraded state:
+
+```json
+{ "status": "degraded", "version": "0.1.0", "database": "not_connected" }
 ```
 
 Swagger docs are available at `http://localhost:8001/docs`.
@@ -244,48 +255,53 @@ Swagger docs are available at `http://localhost:8001/docs`.
 
 ### Environment Variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| **Database** ||||
-| `DB_HOST` | No | `localhost` | MySQL host |
-| `DB_PORT` | No | `3306` | MySQL port |
-| `DB_NAME` | No | `student_profile_db` | Database name |
-| `DB_USERNAME` | No | `root` | MySQL user |
-| `DB_PASSWORD` | Yes | — | MySQL password |
-| `DB_POOL_SIZE` | No | `10` | Max connections in pool |
-| **Service Auth** ||||
-| `X_SERVICE_TOKEN` | Yes | — | Inter-service auth token (shared with orchestrator) |
-| **LLM — OpenAI** ||||
-| `OPENAI_API_KEY` | Yes | — | OpenAI API key |
-| `OPENAI_MODEL` | No | `gpt-4o-mini` | Model identifier |
-| `OPENAI_MAX_TOKENS` | No | `2000` | Max output tokens |
-| `OPENAI_TEMPERATURE` | No | `0.0` | Sampling temperature |
-| **LLM — Anthropic** ||||
-| `ANTHROPIC_API_KEY` | Recommended | — | Anthropic API key (fallback) |
-| `ANTHROPIC_MODEL` | No | `claude-sonnet-4-20250514` | Model identifier |
-| `ANTHROPIC_MAX_TOKENS` | No | `2000` | Max output tokens |
-| **Document Processing** ||||
-| `MAX_FILE_SIZE_MB` | No | `10` | Max upload size |
-| `ALLOWED_EXTENSIONS` | No | `.pdf,.docx,.doc,.jpg,.jpeg,.png` | Comma-separated |
-| `TEMP_UPLOAD_DIR` | No | `/tmp/uploads` | Temp file directory |
-| `TESSERACT_PATH` | No | auto-detect | Tesseract executable path |
-| `OCR_LANGUAGE` | No | `eng` | Tesseract language code |
-| **Application** ||||
-| `LOG_LEVEL` | No | `INFO` | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL` |
-| `USE_MOCK_DATA` | No | `false` | Use in-memory repos (tests only) |
-| `ALLOW_DB_FAILURE` | No | `false` | Continue if DB unavailable (tests only) |
+| Variable                | Required    | Default                    | Description                                         |
+| ----------------------- | ----------- | -------------------------- | --------------------------------------------------- |
+| **Database**            |             |                            |                                                     |
+| `DB_HOST`               | No          | `localhost`                | MySQL host                                          |
+| `DB_PORT`               | No          | `3306`                     | MySQL port                                          |
+| `DB_NAME`               | No          | `student_profile_db`       | Database name                                       |
+| `DB_USERNAME`           | No          | `root`                     | MySQL user                                          |
+| `DB_PASSWORD`           | Yes         | —                          | MySQL password                                      |
+| `DB_POOL_SIZE`          | No          | `10`                       | Max connections in pool                             |
+| **Service Auth**        |             |                            |                                                     |
+| `X_SERVICE_TOKEN`       | Yes         | —                          | Inter-service auth token (shared with orchestrator) |
+| **LLM — OpenAI**        |             |                            |                                                     |
+| `OPENAI_API_KEY`        | Yes         | —                          | OpenAI API key                                      |
+| `OPENAI_MODEL`          | No          | `gpt-4o-mini`              | Model identifier                                    |
+| `OPENAI_MAX_TOKENS`     | No          | `2000`                     | Max output tokens                                   |
+| `OPENAI_TEMPERATURE`    | No          | `0.0`                      | Sampling temperature                                |
+| **LLM — Anthropic**     |             |                            |                                                     |
+| `ANTHROPIC_API_KEY`     | Recommended | —                          | Anthropic API key (fallback)                        |
+| `ANTHROPIC_MODEL`       | No          | `claude-sonnet-4-20250514` | Model identifier                                    |
+| `ANTHROPIC_MAX_TOKENS`  | No          | `2000`                     | Max output tokens                                   |
+| `LLM_MAX_RETRIES`       | No          | `3`                        | Max retries per provider call                       |
+| `LLM_RETRY_DELAY`       | No          | `2`                        | Retry delay (seconds)                               |
+| **Document Processing** |             |                            |                                                     |
+| `MAX_FILE_SIZE_MB`      | No          | `10`                       | Max upload size                                     |
+| `ALLOWED_EXTENSIONS`    | No          | `.pdf,.docx`               | Comma-separated                                     |
+| `TEMP_UPLOAD_DIR`       | No          | `/tmp/uploads`             | Temp file directory                                 |
+| `TESSERACT_PATH`        | No          | auto-detect                | Tesseract executable path                           |
+| `OCR_LANGUAGE`          | No          | `eng`                      | Tesseract language code                             |
+| **Application**         |             |                            |                                                     |
+| `LOG_LEVEL`             | No          | `INFO`                     | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL`             |
+| `USE_MOCK_DATA`         | No          | `true`                     | Use in-memory repos (tests/dev convenience)         |
+| `ALLOW_DB_FAILURE`      | No          | `false`                    | Continue if DB unavailable (tests only)             |
+| **Docker Runtime**      |             |                            |                                                     |
+| `RUN_STARTUP_SCRIPTS`   | No          | `true`                     | Toggle startup script execution in containers       |
+| `DOCKER_MYSQL_PORT`     | No          | `3308`                     | Host port mapped to MySQL in docker compose         |
 
 ### Docker / CI Prefix Compatibility
 
 The service also reads `MYSQL_*` variables for Docker/CI environments:
 
 | `DB_*` Prefix | Equivalent `MYSQL_*` |
-|---------------|---------------------|
-| `DB_HOST` | `MYSQL_HOST` |
-| `DB_NAME` | `MYSQL_DATABASE` |
-| `DB_USERNAME` | `MYSQL_USER` |
-| `DB_PASSWORD` | `MYSQL_PASSWORD` |
-| `DB_PORT` | `MYSQL_PORT` |
+| ------------- | -------------------- |
+| `DB_HOST`     | `MYSQL_HOST`         |
+| `DB_NAME`     | `MYSQL_DATABASE`     |
+| `DB_USERNAME` | `MYSQL_USER`         |
+| `DB_PASSWORD` | `MYSQL_PASSWORD`     |
+| `DB_PORT`     | `MYSQL_PORT`         |
 
 Resolution logic lives in the `settings.get_db_*()` helpers in `app/config.py`.
 
@@ -295,22 +311,32 @@ Resolution logic lives in the `settings.get_db_*()` helpers in `app/config.py`.
 
 ### Tables
 
-| Table | Purpose |
-|-------|---------|
-| `student_profiles` | Main profile records with JSON columns for confidence/evidence maps |
-| `documents` | Uploaded CV/transcript file metadata (hash, extraction method, OCR flag) |
-| `profile_fields` | Granular field-level storage for flexible per-field updates |
-| `gap_analysis` | Readiness scan results with gap list and recommendations |
-| `llm_call_logs` | Audit trail — tokens, cost, latency, retries for every LLM call |
+| Table                | Purpose                                                                     |
+| -------------------- | --------------------------------------------------------------------------- |
+| `student_profiles`   | Lean scalar profile record (core identity, degree, and processing metadata) |
+| `documents`          | Uploaded CV/transcript file metadata (hash, extraction method, OCR flag)    |
+| `extracted_skills`   | Normalized skill rows for direct querying and deduplication                 |
+| `education_entries`  | Normalized education history entries                                        |
+| `experience_entries` | Normalized work/research experience entries                                 |
+| `profile_versions`   | Full JSON profile snapshots per version (authoritative profile state)       |
+| `gap_analysis`       | Readiness scan results with gap list and recommendations                    |
+| `gap_analysis_jobs`  | Async job queue and execution state for gap analysis                        |
+| `llm_call_logs`      | Audit trail — tokens, cost, latency, retries for every LLM call             |
 
 ### Relationships
 
 ```
 student_profiles (1) ──< (N) documents
-student_profiles (1) ──< (N) profile_fields
+student_profiles (1) ──< (N) extracted_skills
+student_profiles (1) ──< (N) education_entries
+student_profiles (1) ──< (N) experience_entries
+student_profiles (1) ──< (N) profile_versions
 student_profiles (1) ──< (N) gap_analysis
+student_profiles (1) ──< (N) gap_analysis_jobs
 student_profiles (1) ──< (N) llm_call_logs
-documents        (1) ──< (N) profile_fields  [via source_document_id]
+documents        (1) ──< (N) extracted_skills   [via source_document_id]
+documents        (1) ──< (N) education_entries  [via source_document_id]
+documents        (1) ──< (N) experience_entries [via source_document_id]
 ```
 
 ### Migrations
@@ -321,9 +347,13 @@ Run in order via `python scripts/run_migrations.py`:
 migrations/
 ├── 001_create_student_profiles.sql
 ├── 002_create_documents.sql
-├── 003_create_profile_fields.sql
-├── 004_create_gap_analysis.sql
-└── 005_create_llm_call_logs.sql
+├── 003_create_extracted_skills.sql
+├── 004_create_education_entries.sql
+├── 005_create_experience_entries.sql
+├── 006_create_profile_versions.sql
+├── 007_create_gap_analysis.sql
+├── 008_create_gap_analysis_jobs.sql
+└── 009_create_llm_call_logs.sql
 ```
 
 ---
@@ -336,36 +366,48 @@ All endpoints (except health) require the `X-Service-Token` header.
 
 ### Health
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/` | No | Root health check |
-| GET | `/health` | No | Detailed health status |
+| Method | Path      | Auth | Description            |
+| ------ | --------- | ---- | ---------------------- |
+| GET    | `/`       | No   | Root health check      |
+| GET    | `/health` | No   | Detailed health status |
 
 ### Profiles
 
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/profiles/parse` | Parse document and create profile |
-| GET | `/profiles/{id}` | Retrieve single profile |
-| GET | `/profiles` | List profiles (paginated: `?page=1&page_size=20`) |
-| PATCH | `/profiles/{id}` | Update profile fields |
-| POST | `/profiles/{id}/gap-analysis` | Run gap analysis |
+| Method | Path                                              | Description                                                     |
+| ------ | ------------------------------------------------- | --------------------------------------------------------------- |
+| POST   | `/api/v1/profiles/parse`                          | Parse document and create profile (also runs auto gap analysis) |
+| POST   | `/api/v1/profiles/parse-upload`                   | Parse streamed multipart upload and create profile              |
+| GET    | `/api/v1/profiles/{profile_id}/clarifications`    | Get unresolved clarifications and readiness state               |
+| POST   | `/api/v1/profiles/{profile_id}/clarifications`    | Submit clarification answers                                    |
+| GET    | `/api/v1/profiles/{profile_id}`                   | Retrieve single profile                                         |
+| GET    | `/api/v1/profiles`                                | List profiles (paginated: `?page=1&page_size=20`)               |
+| PATCH  | `/api/v1/profiles/{profile_id}`                   | Partial update profile fields                                   |
+| PUT    | `/api/v1/profiles/{profile_id}`                   | Update profile fields                                           |
+| GET    | `/api/v1/profiles/{profile_id}/skills`            | Retrieve normalized skills list                                 |
+| GET    | `/api/v1/profiles/{profile_id}/gaps`              | Retrieve latest gap analysis snapshot                           |
+| POST   | `/api/v1/profiles/{profile_id}/gap-analysis`      | Run gap analysis                                                |
+| POST   | `/api/v1/profiles/{profile_id}/gap-analysis/jobs` | Create async gap-analysis job                                   |
+| GET    | `/api/v1/profiles/gap-analysis/jobs/{job_id}`     | Get async gap-analysis job status/result                        |
+
+`POST /api/v1/profiles/{profile_id}/gap-analysis/jobs` behavior:
+
+- Returns `queued` when the profile has no pending clarifications.
+- Returns `blocked` with an error message when clarification is still required.
 
 ### Documents
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/documents/{id}` | Get document metadata |
-| GET | `/documents/profile/{profile_id}` | List documents for a profile |
+| Method | Path                              | Description                  |
+| ------ | --------------------------------- | ---------------------------- |
+| GET    | `/documents/{id}`                 | Get document metadata        |
+| GET    | `/documents/profile/{profile_id}` | List documents for a profile |
 
 ### Example: Parse a Document
 
 ```bash
-curl -X POST http://localhost:8001/profiles/parse \
+curl -X POST http://localhost:8001/api/v1/profiles/parse \
   -H "X-Service-Token: your-service-token" \
   -H "Content-Type: application/json" \
   -d '{
-    "user_id": "user-123",
     "document_type": "cv",
     "file_name": "cv.pdf",
     "file_content_base64": "JVBERi0xLjQK...",
@@ -381,13 +423,29 @@ Response:
   "message": "Profile created",
   "data": {
     "profile_id": "550e8400-e29b-41d4-a716-446655440000",
-    "profile_data": { "full_name": "Jane Doe", "email": "jane@example.com", "..." : "..." },
+    "profile_data": {
+      "full_name": "Jane Doe",
+      "email": "jane@example.com",
+      "...": "..."
+    },
     "llm_provider": "openai",
     "llm_model": "gpt-4o-mini",
     "fallback_used": false,
     "total_processing_time_ms": 3420
   }
 }
+```
+
+### Example: Parse a Streamed File Upload (Multipart)
+
+Use this when you want to upload a file directly instead of sending base64 content.
+
+```bash
+curl -X POST http://localhost:8001/api/v1/profiles/parse-upload \
+  -H "X-Service-Token: your-service-token" \
+  -F "document_type=cv" \
+  -F "target_degree_hint=master" \
+  -F "file=@/absolute/path/to/cv.pdf"
 ```
 
 ---
@@ -404,9 +462,9 @@ Each prompt file follows this shape:
 {
   "prompt_template": {
     "base": {
-      "agent_identity": { "role": "...", "..." : "..." },
-      "..." : { "..." : "..." },
-      "output_format": { "format": "json", "..." : "..." }
+      "agent_identity": { "role": "...", "...": "..." },
+      "...": { "...": "..." },
+      "output_format": { "format": "json", "...": "..." }
     }
   }
 }
@@ -427,11 +485,11 @@ prompt = get_profile_extraction_prompt(
 
 ### Available Prompts
 
-| File | Purpose |
-|------|---------|
-| `profile_extraction_v1.json` | Main CV/transcript extraction |
-| `target_degree_detection_v1.json` | Target degree inference |
-| `gap_analysis_v1.json` | Readiness scan against baselines |
+| File                              | Purpose                          |
+| --------------------------------- | -------------------------------- |
+| `profile_extraction_v1.json`      | Main CV/transcript extraction    |
+| `target_degree_detection_v1.json` | Target degree inference          |
+| `gap_analysis_v1.json`            | Readiness scan against baselines |
 
 ### Prompt Utilities
 
@@ -450,18 +508,18 @@ The `app/utils/prompt_utils.py` module provides:
 
 ```bash
 # Format code
-black app/ tests/
-isort app/ tests/
+uv run black app/ tests/
+uv run isort app/ tests/
 
 # Lint
-flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
-pylint app/ tests/
+uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
+uv run pylint app/ tests/
 
 # Type check
-mypy app/ --ignore-missing-imports --no-strict-optional
+uv run mypy app/ --ignore-missing-imports --no-strict-optional
 
 # Run tests
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
+ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token uv run pytest tests/ -v
 ```
 
 ### Pre-Commit Script
@@ -480,13 +538,13 @@ Runs Black, isort, flake8, pylint, syntax validation, pytest, and mypy in sequen
 ### Run All Tests
 
 ```bash
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
+ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token uv run pytest tests/ -v
 ```
 
 ### Run with Coverage
 
 ```bash
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ --cov=app --cov-report=html -v
+ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token uv run pytest tests/ --cov=app --cov-report=html -v
 open htmlcov/index.html
 ```
 
@@ -496,15 +554,28 @@ open htmlcov/index.html
 tests/
 ├── conftest.py                  # Shared fixtures
 ├── fake_repos.py                # In-memory repository mocks
+├── flow/
+│   ├── test_parse_clarification_flow.py
+│   └── test_profile_crud_flow.py
 ├── unit/
-│   ├── test_config.py           # Configuration loading
-│   ├── test_main.py             # Health endpoints
-│   ├── test_security.py         # X-Service-Token validation
-│   ├── test_document_parser.py  # Document extraction
-│   ├── test_llm_service.py      # LLM integration (mocked)
-│   ├── test_profile_service.py  # Profile orchestration
-│   ├── test_prompt_utils.py     # Prompt template loading & context merge
-│   └── test_llm_prompts.py      # Prompt generation (JSON + text formats)
+│   ├── api/
+│   │   ├── test_health_and_security_api.py
+│   │   └── test_profiles_upload_api.py
+│   ├── llm/
+│   │   ├── test_llm_prompts.py
+│   │   ├── test_llm_retry_count.py
+│   │   ├── test_llm_service.py
+│   │   └── test_target_degree_clarification.py
+│   ├── services/
+│   │   ├── test_clarification_and_jobs.py
+│   │   ├── test_document_parser.py
+│   │   ├── test_gap_analysis_service.py
+│   │   ├── test_profile_fields_flow.py
+│   │   └── test_profile_service.py
+│   └── utils/
+│       ├── test_config.py
+│       ├── test_logging_redaction.py
+│       └── test_prompt_utils.py
 ```
 
 ---
@@ -519,27 +590,27 @@ Shared lint rules live in `.pylintrc` (line length, a few docstring / design rel
 
 ### Pipeline Stages
 
-| Stage | Description |
-|-------|-------------|
-| **Format** | Black + isort validation |
-| **Lint** | **flake8** + **pylint** (both blocking) |
-| **Unit Tests** | `pytest tests/unit/` with JUnit XML artifact |
-| **Type Check** | **mypy** — blocking (after format + lint) |
+| Stage                | Description                                                          |
+| -------------------- | -------------------------------------------------------------------- | --- | ---------------------------- |
+| **Format**           | Black + isort validation                                             |
+| **Lint**             | **flake8** + **pylint** (both blocking)                              |
+| **Unit Tests**       | `pytest tests/unit/` with JUnit XML artifact                         |
+| **Type Check**       | **mypy** — blocking (after format + lint)                            |
 | **Tests + Coverage** | Full `pytest tests/` with HTML + Cobertura XML (after format + lint) |
-| **Security Audit** | Bandit (JSON artifact; console step uses `|| true` so findings are visible without failing the job) |
-| **Docker Build** | Verify image builds — no push (after all above) |
-| **Summary** | Markdown table of all job results |
+| **Security Audit**   | Bandit (JSON artifact; command uses `                                |     | true` to avoid hard-failing) |
+| **Docker Build**     | Verify image builds — no push (after all above)                      |
+| **Summary**          | Markdown table of all job results                                    |
 
 ### Local CI Simulation
 
 ```bash
-black --check app/ tests/
-isort --check-only app/ tests/
-flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
-pylint app/ tests/
-mypy app/ --ignore-missing-imports --no-strict-optional
-ALLOW_DB_FAILURE=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v
-bandit -r app/ || true
+uv run black --check app/ tests/
+uv run isort --check-only app/ tests/
+uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
+uv run pylint app/ tests/
+uv run mypy app/ --ignore-missing-imports --no-strict-optional
+ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token uv run pytest tests/ -v
+uv run bandit -r app/ || true
 docker build -t student-profile-agent .
 ```
 
@@ -578,7 +649,7 @@ ouroboros-ai-student-profile/
 ├── app/
 │   ├── api/                     # Route handlers (thin layer)
 │   │   ├── health.py            # GET / and /health
-│   │   ├── profiles.py          # POST /parse, GET, PATCH, gap-analysis
+│   │   ├── profiles.py          # Parse, clarifications, and gap-analysis (+ jobs)
 │   │   └── documents.py         # GET /documents/{id}
 │   ├── core/                    # Infrastructure
 │   │   ├── logging.py           # structlog configuration
@@ -601,7 +672,11 @@ ouroboros-ai-student-profile/
 │   │   ├── mysql_base.py        # Base repository with helpers
 │   │   ├── mysql_profile_repo.py
 │   │   ├── mysql_document_repo.py
-│   │   └── mysql_field_repo.py
+│   │   ├── mysql_profile_normalized_repo.py
+│   │   ├── mysql_field_repo.py
+│   │   ├── mysql_gap_analysis_repo.py
+│   │   ├── mysql_gap_job_repo.py
+│   │   └── mysql_llm_log_repo.py
 │   ├── services/                # Business logic
 │   │   ├── document_parser.py   # PDF/DOCX/OCR extraction
 │   │   ├── llm_service.py       # OpenAI/Anthropic with fallback
@@ -620,19 +695,16 @@ ouroboros-ai-student-profile/
 │   ├── profile_extraction_v1.json
 │   ├── target_degree_detection_v1.json
 │   └── gap_analysis_v1.json
-├── migrations/                  # SQL migration files (001-005)
+├── migrations/                  # SQL migration files (001-009)
 ├── scripts/
 │   ├── run_migrations.py
 │   └── seed_test_data.py
 ├── tests/                       # Unit tests + shared fixtures
 ├── .github/workflows/
 │   └── deploy.yml               # CI/CD pipeline
-├── requirements.txt
-├── requirements-dev.txt
 ├── Dockerfile
 ├── docker-compose.yml
 ├── pyproject.toml
-├── pytest.ini
 ├── .pylintrc
 ├── .flake8
 ├── .env.example
@@ -654,7 +726,7 @@ ouroboros-ai-student-profile/
 docker compose ps
 
 # Test connection
-mysql -h localhost -P 3308 -u root -p -e "SHOW DATABASES;"
+mysql -h localhost -P ${DOCKER_MYSQL_PORT:-3308} -u root -p -e "SHOW DATABASES;"
 
 # Verify credentials
 grep DB_ .env
@@ -665,7 +737,7 @@ grep DB_ .env
 **Symptom**: `LLMExtractionError: Both LLM providers failed`
 
 ```bash
-# Verify API keys are set
+# Verify provider API keys are set
 grep API_KEY .env
 
 # Test OpenAI connectivity
@@ -697,7 +769,7 @@ echo "TESSERACT_PATH=$(which tesseract)" >> .env
 
 ```bash
 source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
 
 ---
