@@ -11,10 +11,6 @@ logger = get_logger(__name__)
 MIME_TYPE_MAP = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ".doc": "application/msword",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-    ".png": "image/png",
 }
 
 

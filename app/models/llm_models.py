@@ -23,6 +23,7 @@ class LLMCallLog(BaseModel):
     success: bool
     error_message: Optional[str] = None
     retry_count: int = 0
+    prompt_template_version: Optional[str] = None
     trace_id: str
 
     created_at: Optional[datetime] = None

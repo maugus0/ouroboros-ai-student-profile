@@ -1,6 +1,5 @@
 """Data-access layer for the student_profiles table (raw SQL, aiomysql)."""
 
-import json
 from typing import Any
 
 from app.core.logging import get_logger
@@ -23,15 +22,14 @@ class ProfileRepository(MySQLBaseRepository):
                 target_degree_confidence, target_degree_source,
                 target_degree_needs_clarification,
                 gpa, gpa_scale, gpa_normalized, gpa_confidence,
-                profile_json, confidence_map, evidence_map,
-                contradiction_flags, missing_critical_fields, clarification_queue,
+                profile_version, profile_prompt_version,
                 llm_model_used, llm_fallback_used, llm_fallback_reason,
                 total_processing_time_ms
             ) VALUES (
                 %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
-                %s, %s, %s, %s, %s, %s,
+                %s, %s,
                 %s, %s, %s, %s
             )
         """
@@ -51,12 +49,8 @@ class ProfileRepository(MySQLBaseRepository):
             profile_data.get("gpa_scale"),
             profile_data.get("gpa_normalized"),
             profile_data.get("gpa_confidence"),
-            json.dumps(profile_data.get("profile_json", {})),
-            json.dumps(profile_data.get("confidence_map", {})),
-            json.dumps(profile_data.get("evidence_map", {})),
-            json.dumps(profile_data.get("contradiction_flags", [])),
-            json.dumps(profile_data.get("missing_critical_fields", [])),
-            json.dumps(profile_data.get("clarification_queue", [])),
+            profile_data.get("profile_version", 1),
+            profile_data.get("profile_prompt_version"),
             profile_data.get("llm_model_used"),
             profile_data.get("llm_fallback_used", False),
             profile_data.get("llm_fallback_reason"),
@@ -91,20 +85,23 @@ class ProfileRepository(MySQLBaseRepository):
         if not updates:
             return 0
 
-        json_fields = {
+        # Filter out any deprecated JSON columns (lean storage model)
+        deprecated_json_fields = {
             "profile_json",
             "confidence_map",
             "evidence_map",
             "contradiction_flags",
-            "missing_critical_fields",
             "clarification_queue",
         }
+        updates = {k: v for k, v in updates.items() if k not in deprecated_json_fields}
+        if not updates:
+            return 0
 
         set_clauses = []
         params = []
         for key, value in updates.items():
             set_clauses.append(f"{key} = %s")
-            params.append(json.dumps(value) if key in json_fields else value)
+            params.append(value)
 
         params.append(profile_id)
         query = f"UPDATE student_profiles SET {', '.join(set_clauses)} WHERE id = %s"

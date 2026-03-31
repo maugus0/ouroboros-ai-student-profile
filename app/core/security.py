@@ -8,6 +8,31 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def validate_service_token_value(token: str | None, path: str = "") -> None:
+    """Validate the raw X-Service-Token value.
+
+    Args:
+        token: Token value from request headers.
+        path: Optional request path for logging context.
+
+    Raises:
+        HTTPException: If token is missing or invalid.
+    """
+    if not token:
+        logger.warning("missing_service_token", path=path)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="X-Service-Token header required",
+        )
+
+    if token != settings.X_SERVICE_TOKEN:
+        logger.warning("invalid_service_token", path=path)
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Invalid service token",
+        )
+
+
 def validate_service_token(request: Request) -> None:
     """Validate X-Service-Token header from the orchestrator.
 
@@ -16,16 +41,4 @@ def validate_service_token(request: Request) -> None:
     """
     token = request.headers.get("X-Service-Token")
 
-    if not token:
-        logger.warning("missing_service_token", path=request.url.path)
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="X-Service-Token header required",
-        )
-
-    if token != settings.X_SERVICE_TOKEN:
-        logger.warning("invalid_service_token", path=request.url.path)
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Invalid service token",
-        )
+    validate_service_token_value(token=token, path=request.url.path)

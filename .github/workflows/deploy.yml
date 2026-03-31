@@ -41,13 +41,14 @@ jobs:
       - name: Install dev dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Check formatting (Black)
-        run: black --check --diff app/ tests/
+        run: uv run black --check --diff app/ tests/
 
       - name: Check import sorting (isort)
-        run: isort --check-only --diff app/ tests/
+        run: uv run isort --check-only --diff app/ tests/
 
   # -- Linting ---------------------------------------------------------
   lint:
@@ -65,13 +66,14 @@ jobs:
       - name: Install dev dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Run flake8
-        run: flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
+        run: uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
 
       - name: Run pylint
-        run: pylint app/ tests/
+        run: uv run pylint app/ tests/
 
   # -- Unit Tests ------------------------------------------------------
   unit-tests:
@@ -89,7 +91,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Run unit tests
         env:
@@ -100,7 +103,7 @@ jobs:
           MYSQL_DATABASE: "test_db"
           MYSQL_USER: "test_user"
           MYSQL_PASSWORD: "test_pass"
-        run: pytest tests/unit/ -v --tb=short --junitxml=junit-report.xml
+        run: uv run pytest tests/unit/ -v --tb=short --junitxml=junit-report.xml
 
       - name: Upload test results
         if: always()
@@ -127,10 +130,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Run mypy
-        run: mypy app/ --ignore-missing-imports --no-strict-optional
+        run: uv run mypy app/ --ignore-missing-imports --no-strict-optional
 
   # -- Full test suite + Coverage --------------------------------------
   integration-tests:
@@ -149,7 +153,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Run tests with coverage
         env:
@@ -160,7 +165,7 @@ jobs:
           MYSQL_DATABASE: "test_db"
           MYSQL_USER: "test_user"
           MYSQL_PASSWORD: "test_pass"
-        run: pytest tests/ --cov=app --cov-report=html --cov-report=xml -v
+        run: uv run pytest tests/ --cov=app --cov-report=html --cov-report=xml -v
 
       - name: Upload coverage report
         if: always()
@@ -187,12 +192,13 @@ jobs:
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install uv
+          uv sync --extra dev
 
       - name: Run Bandit
         run: |
-          bandit -r app/ -f json -o bandit-report.json || true
-          bandit -r app/ || true
+          uv run bandit -r app/ -f json -o bandit-report.json || true
+          uv run bandit -r app/ || true
 
       - name: Upload security reports
         if: always()
@@ -226,7 +232,16 @@ jobs:
   # -- Summary ---------------------------------------------------------
   summary:
     name: CI/CD Summary
-    needs: [unit-tests, format, lint, type-check, integration-tests, security-audit, build-docker]
+    needs:
+      [
+        unit-tests,
+        format,
+        lint,
+        type-check,
+        integration-tests,
+        security-audit,
+        build-docker,
+      ]
     runs-on: ubuntu-latest
     if: always()
     steps:

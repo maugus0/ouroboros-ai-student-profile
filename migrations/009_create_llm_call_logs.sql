@@ -1,5 +1,5 @@
--- Migration 005: LLM Call Logs
--- Audit trail for all LLM API calls
+-- Migration 008: LLM Call Logs (audit trail for all LLM operations)
+-- Depends on: student_profiles
 
 CREATE TABLE IF NOT EXISTS llm_call_logs (
     id VARCHAR(36) PRIMARY KEY COMMENT 'UUID v4',
@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS llm_call_logs (
     success BOOLEAN NOT NULL,
     error_message TEXT NULL,
     retry_count INT DEFAULT 0,
+    prompt_template_version VARCHAR(64) NULL COMMENT 'Prompt template version used for this call',
 
     -- Audit
     trace_id VARCHAR(36) NOT NULL COMMENT 'Request trace ID',
@@ -27,4 +28,4 @@ CREATE TABLE IF NOT EXISTS llm_call_logs (
     INDEX idx_profile_id (profile_id),
     INDEX idx_trace_id (trace_id),
     INDEX idx_created_at (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

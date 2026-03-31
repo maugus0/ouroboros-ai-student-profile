@@ -39,7 +39,7 @@ class Settings(BaseSettings):
 
     # ========== Document Processing ==========
     MAX_FILE_SIZE_MB: int = 10
-    ALLOWED_EXTENSIONS: str = ".pdf,.docx,.doc,.jpg,.jpeg,.png"
+    ALLOWED_EXTENSIONS: str = ".pdf,.docx"
     TEMP_UPLOAD_DIR: str = "/tmp/uploads"
 
     TESSERACT_PATH: str = ""

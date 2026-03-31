@@ -1,5 +1,5 @@
--- Migration 001: Student Profiles table
--- Stores parsed student profile data with confidence metadata
+-- Migration 001: Student Profiles (base table, no dependencies)
+-- Lean schema - complete profile state is sourced from profile_versions
 
 CREATE TABLE IF NOT EXISTS student_profiles (
     id VARCHAR(36) PRIMARY KEY COMMENT 'UUID v4',
@@ -23,13 +23,9 @@ CREATE TABLE IF NOT EXISTS student_profiles (
     gpa_normalized DECIMAL(4,2) NULL COMMENT 'Normalized to 4.0 scale',
     gpa_confidence DECIMAL(3,2) NULL,
 
-    -- Profile JSON (full structured data)
-    profile_json JSON NOT NULL COMMENT 'Complete profile with all extracted fields',
-    confidence_map JSON NULL COMMENT 'Per-field confidence scores',
-    evidence_map JSON NULL COMMENT 'Per-field evidence snippets from documents',
-    contradiction_flags JSON NULL COMMENT 'Conflicting data between CV and transcript',
-    missing_critical_fields JSON NULL COMMENT 'List of critical fields that are null',
-    clarification_queue JSON NULL COMMENT 'Fields requiring user clarification',
+    -- Versioning / prompt traceability
+    profile_version INT NOT NULL DEFAULT 1 COMMENT 'Monotonic profile version',
+    profile_prompt_version VARCHAR(64) NULL COMMENT 'Prompt template version used for extraction',
 
     -- Metadata
     llm_model_used VARCHAR(100) NULL COMMENT 'e.g., gpt-4, claude-sonnet-4',
