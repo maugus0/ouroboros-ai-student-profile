@@ -12,9 +12,9 @@ from app.core.logging import get_logger
 from app.llm.anthropic_client import call_anthropic
 from app.llm.openai_client import call_openai
 from app.llm.prompts import get_gap_analysis_prompt, get_profile_extraction_prompt
-from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
 from app.llm.schemas import ExtractedProfile
 from app.models.llm_models import LLMExtractionResult
+from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
 from app.utils.exceptions import LLMExtractionError
 
 logger = get_logger(__name__)
@@ -135,7 +135,9 @@ class LLMService:
                 raise LLMExtractionError(f"Both LLM providers failed. Last error: {exc}") from exc
         else:
             # No fallback configured; report only OpenAI error
-            raise LLMExtractionError(f"OpenAI extraction failed and Anthropic fallback is not configured. Error: {fallback_reason}")
+            raise LLMExtractionError(
+                f"OpenAI extraction failed and Anthropic fallback is not configured. Error: {fallback_reason}"
+            )
 
     async def run_gap_analysis(self, profile_json: dict, target_degree: str, profile_id: Optional[str] = None) -> dict:
         """Run a gap analysis on an extracted profile."""

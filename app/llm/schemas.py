@@ -75,7 +75,9 @@ class ExtractedProfile(BaseModel):
 
     # Academic
     education: list[EducationEntry] = Field(default_factory=list)
-    current_degree_level: Optional[DegreeLevelEnum] = Field(default=None, description="Highest /most recent degree being pursued or completed")
+    current_degree_level: Optional[DegreeLevelEnum] = Field(
+        default=None, description="Highest /most recent degree being pursued or completed"
+    )
     gpa_highest: Optional[float] = None
     gpa_scale: Optional[float] = None
 

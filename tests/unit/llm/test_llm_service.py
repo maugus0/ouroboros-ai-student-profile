@@ -1,8 +1,8 @@
 """Tests for LLM service (mocked — no real API calls)."""
 
-from app.config import settings
 import pytest
 
+from app.config import settings
 from app.services.llm_service import LLMService
 from app.utils.exceptions import LLMExtractionError
 

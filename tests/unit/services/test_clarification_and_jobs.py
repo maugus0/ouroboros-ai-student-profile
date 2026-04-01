@@ -1,6 +1,5 @@
 """Tests for clarification flow and async gap-analysis job lifecycle."""
 
-import json
 from datetime import date
 
 import pytest
@@ -64,7 +63,7 @@ class _StubNormalizedRepo:
 @pytest.mark.asyncio
 async def test_submit_clarifications_moves_status_to_analysis_ready():
     initial_profile_json = {"full_name": "Test"}
-    
+
     row = {
         "profile_version": 1,
     }
@@ -176,7 +175,7 @@ def test_react_marks_contradicted_field_for_clarification():
 @pytest.mark.asyncio
 async def test_submit_clarifications_updates_dob_from_human_date_format():
     initial_profile_json = {"full_name": "Test"}
-    
+
     row = {
         "profile_version": 1,
     }
@@ -210,7 +209,7 @@ async def test_submit_clarifications_updates_target_degree_metadata_and_gpa_rati
     service.profile_repo = _StubProfileRepo(row)
     service.normalized_repo = _StubNormalizedRepo(initial_profile_json)
 
-    result = await service.submit_clarifications(
+    await service.submit_clarifications(
         "profile-1",
         [
             {"field": "target_degree_level", "value": "PhD"},
@@ -232,9 +231,7 @@ async def test_submit_clarifications_updates_target_degree_metadata_and_gpa_rati
 async def test_get_clarifications_includes_react_decision_trace():
     initial_profile_json = {
         "full_name": "John Doe",
-        "react_decision_trace": {
-            "target_degree_level": {"decision": "clarify", "reason": "low_confidence"}
-        },
+        "react_decision_trace": {"target_degree_level": {"decision": "clarify", "reason": "low_confidence"}},
     }
     row = {
         "profile_version": 1,
@@ -251,8 +248,11 @@ async def test_get_clarifications_includes_react_decision_trace():
 
 @pytest.mark.asyncio
 async def test_create_gap_job_blocked_when_clarification_pending():
-    profile_json_with_queue = {"field": "target_degree_level", "clarification_queue": [{"field": "target_degree_level"}]}
-    
+    profile_json_with_queue = {
+        "field": "target_degree_level",
+        "clarification_queue": [{"field": "target_degree_level"}],
+    }
+
     service = GapAnalysisService()
     service.profile_repo = _StubProfileRepo({"id": "profile-1"})
     service.normalized_repo = _StubNormalizedRepo(profile_json_with_queue)
@@ -270,7 +270,7 @@ async def test_process_gap_job_completes_when_ready():
         "full_name": "Test",
         "target_degree_level": "master",
     }
-    
+
     service = GapAnalysisService()
     service.profile_repo = _StubProfileRepo({"target_degree_level": "master"})
     service.normalized_repo = _StubNormalizedRepo(profile_json)

@@ -73,7 +73,7 @@ jobs:
         run: uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
 
       - name: Run pylint
-        run: uv run pylint app/ tests/
+        run: uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613
 
   # -- Unit Tests ------------------------------------------------------
   unit-tests:

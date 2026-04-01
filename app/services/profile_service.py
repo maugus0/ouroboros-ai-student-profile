@@ -1,7 +1,7 @@
 """Profile orchestration - parse document -> LLM extract -> store."""
 
-import json
 import hashlib
+import json
 import re
 import time
 from datetime import date, datetime
@@ -10,8 +10,8 @@ from typing import Any, Optional
 from app.core.logging import get_logger
 from app.repositories.mysql_document_repo import DocumentRepository
 from app.repositories.mysql_field_repo import FieldRepository
-from app.repositories.mysql_profile_repo import ProfileRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
+from app.repositories.mysql_profile_repo import ProfileRepository
 from app.services.document_parser import DocumentParser
 from app.services.gap_analysis_service import GapAnalysisService
 from app.services.llm_service import LLMService
@@ -141,14 +141,14 @@ class ProfileService:
 
     async def get_profile(self, profile_id: str) -> dict[str, Any]:
         """Retrieve a profile by ID.
-        
+
         Returns scalar columns from student_profiles and the latest profile_json
         snapshot from profile_versions (source of truth for full JSON state).
         """
         row = await self.profile_repo.get_profile_by_id(profile_id)
         if not row:
             raise NotFoundError("Profile")
-        
+
         # Fetch latest version snapshot from profile_versions
         latest_version = await self.normalized_repo.get_latest_profile_version(profile_id)
         profile_json = {}
@@ -156,10 +156,8 @@ class ProfileService:
             profile_json = dict(latest_version.get("profile_json") or {})
 
         # Remove keys duplicated by top-level scalar columns to keep payload concise.
-        compact_profile_json = {
-            key: value for key, value in profile_json.items() if key not in row
-        }
-        
+        compact_profile_json = {key: value for key, value in profile_json.items() if key not in row}
+
         # Keep response compact: expose profile_json once (no duplicated top-level mirrors).
         profile = {
             **row,
@@ -183,7 +181,7 @@ class ProfileService:
 
     async def update_profile(self, profile_id: str, updates: dict[str, Any]) -> dict[str, Any]:
         """Update specific fields on a profile.
-        
+
         Updates only scalar columns in student_profiles.
         Profile state (full JSON) is maintained in profile_versions.
         """
@@ -196,11 +194,11 @@ class ProfileService:
             next_version = int(existing.get("profile_version") or 1) + 1
             clean["profile_version"] = next_version
             await self.profile_repo.update_profile(profile_id, clean)
-            
+
             # Fetch latest version snapshot to use as base for next snapshot
             latest_version = await self.normalized_repo.get_latest_profile_version(profile_id)
             merged_profile_json = dict(latest_version.get("profile_json") or {}) if latest_version else {}
-            
+
             try:
                 await self.normalized_repo.create_profile_version_snapshot(
                     profile_id=profile_id,
@@ -235,7 +233,7 @@ class ProfileService:
         # Fetch latest version snapshot from profile_versions (source of truth)
         latest_version = await self.normalized_repo.get_latest_profile_version(profile_id)
         profile_json = dict(latest_version.get("profile_json") or {}) if latest_version else {}
-        
+
         # Re-apply ReAct decision pattern to regenerate both trace and queue from source data
         react_state = self._apply_react_decision_pattern(profile_json)
         queue = react_state.get("clarification_queue") or []
@@ -267,14 +265,16 @@ class ProfileService:
                 answer_map[field] = item.get("value")
 
         applied_fields: list[str] = []
-        
+
         # Update profile data with clarification answers and mark them as high confidence
-        confidence_map = profile_json.get("confidence_map") if isinstance(profile_json.get("confidence_map"), dict) else {}
+        confidence_map = (
+            profile_json.get("confidence_map") if isinstance(profile_json.get("confidence_map"), dict) else {}
+        )
         for field, value in answer_map.items():
             profile_json[field] = value
             confidence_map[field] = 1.0  # User-provided values are 100% confident
             applied_fields.append(field)
-        
+
         if confidence_map:
             profile_json["confidence_map"] = confidence_map
 
@@ -350,7 +350,7 @@ class ProfileService:
     @staticmethod
     def _flatten_profile_for_db(profile_data: dict) -> dict:
         """Map ExtractedProfile fields to the flat student_profiles columns (scalar only).
-        
+
         Note: JSON fields (confidence_map, evidence_map, contradiction_flags, clarification_queue)
         are stored in profile_versions snapshots, not in student_profiles (lean storage model).
         """
@@ -456,9 +456,7 @@ class ProfileService:
             return "master"
         if "bachelor" in text or re.search(r"\bbs\b|\bba\b|\bbsc\b", text):
             return "bachelor"
-        if field == "current_degree_level" and (
-            "high school" in text or "high_school" in text or text == "highschool"
-        ):
+        if field == "current_degree_level" and ("high school" in text or "high_school" in text or text == "highschool"):
             return "high_school"
         if text == "unknown":
             return "unknown"
@@ -498,7 +496,9 @@ class ProfileService:
         normalized = dict(profile_data or {})
 
         confidence_map = normalized.get("confidence_map") if isinstance(normalized.get("confidence_map"), dict) else {}
-        contradiction_flags = normalized.get("contradiction_flags") if isinstance(normalized.get("contradiction_flags"), list) else []
+        contradiction_flags = (
+            normalized.get("contradiction_flags") if isinstance(normalized.get("contradiction_flags"), list) else []
+        )
 
         contradicted_fields: set[str] = set()
         for item in contradiction_flags:
@@ -568,7 +568,8 @@ class ProfileService:
             if reason is None and field in confidence_map:
                 try:
                     confidence = float(confidence_map[field])
-                    if confidence < float(rule["min_confidence"]):
+                    min_confidence = rule.get("min_confidence")
+                    if isinstance(min_confidence, (int, float)) and confidence < float(min_confidence):
                         reason = "low_confidence"
                 except (TypeError, ValueError):
                     reason = "invalid_confidence"
@@ -585,7 +586,7 @@ class ProfileService:
         target_normalized = cls._normalize_degree_level_value(
             "target_degree_level", normalized.get("target_degree_level")
         )
-        
+
         if (
             current_normalized not in {None, "unknown"}
             and target_normalized not in {None, "unknown"}
@@ -613,10 +614,10 @@ class ProfileService:
                         is_user_answered = field_confidence is not None and float(field_confidence) == 1.0
                     except (TypeError, ValueError):
                         is_user_answered = False
-                    
+
                     if not is_user_answered:
                         fields_to_check.add(field)
-        
+
         # Add fields from missing_critical_fields
         missing_fields = list(normalized.get("missing_critical_fields") or [])
         for field in missing_fields:
@@ -637,7 +638,7 @@ class ProfileService:
         publications = normalized.get("publications")
         has_publications = isinstance(publications, list) and len(publications) > 0
         publications_confidence = confidence_map.get("publications")
-        
+
         # Check if publications has been explicitly answered by user (confidence = 1.0)
         publications_already_answered = False
         if publications_confidence is not None:
@@ -650,11 +651,11 @@ class ProfileService:
         # Keep publications visible in trace once answered, even when queue becomes empty.
         if publications_already_answered and "publications" not in decision_trace:
             decision_trace["publications"] = {"decision": "accept"}
-        
+
         if (
-            target_degree_normalized == "phd" 
-            and not has_publications 
-            and not publications_already_answered 
+            target_degree_normalized == "phd"
+            and not has_publications
+            and not publications_already_answered
             and "publications" not in decision_trace
         ):
             decision_trace["publications"] = {"decision": "clarify", "reason": "missing_or_unknown"}
@@ -663,7 +664,9 @@ class ProfileService:
         new_queue: list[dict[str, Any]] = []
         for field, trace_entry in decision_trace.items():
             if isinstance(trace_entry, dict) and trace_entry.get("decision") == "clarify":
-                question = critical_rules.get(field, {}).get("question") or default_questions.get(field, f"Please provide your {field.replace('_', ' ')}.")
+                question = critical_rules.get(field, {}).get("question") or default_questions.get(
+                    field, f"Please provide your {field.replace('_', ' ')}."
+                )
                 new_queue.append({"field": field, "question": question})
 
         normalized["clarification_queue"] = new_queue
@@ -673,7 +676,9 @@ class ProfileService:
         return normalized
 
     @staticmethod
-    def _build_profile_fields(profile_id: str, source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
+    def _build_profile_fields(
+        profile_id: str, source_document_id: str, profile_data: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """Flatten extracted profile JSON into profile_fields records.
 
         Array-heavy fields are persisted in dedicated normalized tables to avoid
@@ -751,7 +756,9 @@ class ProfileService:
     @classmethod
     def _build_normalized_skills(cls, source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
         skills = profile_data.get("technical_skills") if isinstance(profile_data.get("technical_skills"), list) else []
-        confidence_map = profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        confidence_map = (
+            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        )
         confidence = confidence_map.get("technical_skills")
         confidence_score = None
         if confidence is not None:
@@ -787,7 +794,9 @@ class ProfileService:
     @staticmethod
     def _build_education_entries(source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
         education = profile_data.get("education") if isinstance(profile_data.get("education"), list) else []
-        confidence_map = profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        confidence_map = (
+            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        )
         evidence_map = profile_data.get("evidence_map") if isinstance(profile_data.get("evidence_map"), dict) else {}
         confidence_score = confidence_map.get("education")
         parsed_confidence = None
@@ -822,16 +831,19 @@ class ProfileService:
                 "source_document_id": source_document_id,
                 "sort_index": index,
             }
-            fingerprint = ProfileService._entry_fingerprint(row, keys=[
-                "institution",
-                "degree",
-                "field_of_study",
-                "start_date",
-                "end_date",
-                "gpa",
-                "gpa_scale",
-                "achievements",
-            ])
+            fingerprint = ProfileService._entry_fingerprint(
+                row,
+                keys=[
+                    "institution",
+                    "degree",
+                    "field_of_study",
+                    "start_date",
+                    "end_date",
+                    "gpa",
+                    "gpa_scale",
+                    "achievements",
+                ],
+            )
             if fingerprint in seen_fingerprints:
                 continue
             seen_fingerprints.add(fingerprint)
@@ -841,7 +853,9 @@ class ProfileService:
 
     @staticmethod
     def _build_experience_entries(source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
-        confidence_map = profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        confidence_map = (
+            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
+        )
         evidence_map = profile_data.get("evidence_map") if isinstance(profile_data.get("evidence_map"), dict) else {}
 
         def _coerce_confidence(value: Any) -> float | None:
@@ -860,7 +874,9 @@ class ProfileService:
         work_confidence = _coerce_confidence(confidence_map.get("work_experience"))
         research_confidence = _coerce_confidence(confidence_map.get("research_experience"))
 
-        work_experience = profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+        work_experience = (
+            profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+        )
         for index, item in enumerate(work_experience):
             if not isinstance(item, dict):
                 continue
@@ -883,22 +899,27 @@ class ProfileService:
                 "source_document_id": source_document_id,
                 "sort_index": index,
             }
-            fingerprint = ProfileService._entry_fingerprint(row, keys=[
-                "experience_type",
-                "organization",
-                "title",
-                "start_date",
-                "end_date",
-                "description",
-                "skills_used",
-            ])
+            fingerprint = ProfileService._entry_fingerprint(
+                row,
+                keys=[
+                    "experience_type",
+                    "organization",
+                    "title",
+                    "start_date",
+                    "end_date",
+                    "description",
+                    "skills_used",
+                ],
+            )
             if fingerprint in seen_fingerprints:
                 continue
             seen_fingerprints.add(fingerprint)
             row["entry_fingerprint"] = fingerprint
             rows.append(row)
 
-        research_experience = profile_data.get("research_experience") if isinstance(profile_data.get("research_experience"), list) else []
+        research_experience = (
+            profile_data.get("research_experience") if isinstance(profile_data.get("research_experience"), list) else []
+        )
         for index, item in enumerate(research_experience):
             if not isinstance(item, dict):
                 continue
@@ -920,14 +941,17 @@ class ProfileService:
                 "source_document_id": source_document_id,
                 "sort_index": index,
             }
-            fingerprint = ProfileService._entry_fingerprint(row, keys=[
-                "experience_type",
-                "title",
-                "role",
-                "start_date",
-                "description",
-                "publication_venue",
-            ])
+            fingerprint = ProfileService._entry_fingerprint(
+                row,
+                keys=[
+                    "experience_type",
+                    "title",
+                    "role",
+                    "start_date",
+                    "description",
+                    "publication_venue",
+                ],
+            )
             if fingerprint in seen_fingerprints:
                 continue
             seen_fingerprints.add(fingerprint)
@@ -942,4 +966,3 @@ class ProfileService:
         normalized = {key: payload.get(key) for key in keys}
         canonical = json.dumps(normalized, sort_keys=True, ensure_ascii=True, default=str)
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-

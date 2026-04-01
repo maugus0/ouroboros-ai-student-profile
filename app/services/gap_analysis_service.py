@@ -5,10 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.core.logging import get_logger
-from app.repositories.mysql_gap_job_repo import GapAnalysisJobRepository
 from app.repositories.mysql_gap_analysis_repo import GapAnalysisRepository
-from app.repositories.mysql_profile_repo import ProfileRepository
+from app.repositories.mysql_gap_job_repo import GapAnalysisJobRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
+from app.repositories.mysql_profile_repo import ProfileRepository
 from app.services.llm_service import LLMService
 from app.utils.exceptions import NotFoundError
 

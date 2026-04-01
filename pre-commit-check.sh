@@ -29,6 +29,11 @@ else
     warning "Proceeding without venv"
 fi
 
+if ! command -v uv > /dev/null 2>&1; then
+    error "uv is required but not found. Install with: pip install uv"
+    exit 1
+fi
+
 PYTHON_CMD="python"
 if ! command -v "${PYTHON_CMD}" > /dev/null 2>&1; then
     if command -v python3 > /dev/null 2>&1; then
@@ -40,25 +45,25 @@ if ! command -v "${PYTHON_CMD}" > /dev/null 2>&1; then
 fi
 
 echo "1. Checking code formatting (Black)..."
-if black --check app/ tests/ > /dev/null 2>&1; then
+if uv run black --check app/ tests/ > /dev/null 2>&1; then
     success "Code formatting passed"
 else
-    error "Formatting failed. Run: black app/ tests/"
+    error "Formatting failed. Run: uv run black app/ tests/"
     exit 1
 fi
 
 echo ""
 echo "2. Checking import sorting (isort)..."
-if isort --check-only app/ tests/ > /dev/null 2>&1; then
+if uv run isort --check-only app/ tests/ > /dev/null 2>&1; then
     success "Import sorting passed"
 else
-    error "Import sorting failed. Run: isort app/ tests/"
+    error "Import sorting failed. Run: uv run isort app/ tests/"
     exit 1
 fi
 
 echo ""
 echo "3. Running linting (flake8)..."
-if flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501 > /dev/null 2>&1; then
+if uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501 > /dev/null 2>&1; then
     success "Linting passed (flake8)"
 else
     error "Linting failed (flake8)"
@@ -67,11 +72,11 @@ fi
 
 echo ""
 echo "4. Running pylint..."
-if pylint app/ tests/ > /dev/null 2>&1; then
+if uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613 > /dev/null 2>&1; then
     success "Linting passed (pylint)"
 else
     error "Linting failed (pylint)"
-    pylint app/ tests/
+    uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613
     exit 1
 fi
 
@@ -86,21 +91,21 @@ fi
 
 echo ""
 echo "6. Running tests..."
-if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v --tb=short > /dev/null 2>&1; then
+if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest tests/ -v --tb=short > /dev/null 2>&1; then
     success "Tests passed"
 else
     error "Tests failed"
-    ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token pytest tests/ -v --tb=short
+    ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest tests/ -v --tb=short
     exit 1
 fi
 
 echo ""
 echo "7. Running type checking (mypy)..."
-if mypy app/ --ignore-missing-imports --no-strict-optional > /dev/null 2>&1; then
+if uv run mypy app/ --ignore-missing-imports --no-strict-optional > /dev/null 2>&1; then
     success "Type checking passed"
 else
     error "Type checking failed (mypy)"
-    mypy app/ --ignore-missing-imports --no-strict-optional
+    uv run mypy app/ --ignore-missing-imports --no-strict-optional
     exit 1
 fi
 

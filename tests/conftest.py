@@ -9,8 +9,8 @@ os.environ.setdefault("ALLOW_DB_FAILURE", "true")
 os.environ.setdefault("USE_MOCK_DATA", "true")
 os.environ.setdefault("X_SERVICE_TOKEN", "test-service-token")
 
-from app.main import app  # noqa: E402  # pylint: disable=wrong-import-position
 from app.config import settings  # noqa: E402  # pylint: disable=wrong-import-position
+from app.main import app  # noqa: E402  # pylint: disable=wrong-import-position
 
 
 @pytest.fixture
@@ -35,4 +35,3 @@ def client():
     """Shared API test client for unit and flow tests."""
     with TestClient(app) as test_client:
         yield test_client
-

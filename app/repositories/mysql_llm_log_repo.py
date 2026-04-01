@@ -25,20 +25,22 @@ class LLMCallLogRepository(MySQLBaseRepository):
         """
         params = (
             log_id,
-            log_data.get('profile_id'),
-            log_data['operation'],
-            log_data['llm_provider'],
-            log_data['model_name'],
-            log_data.get('input_tokens'),
-            log_data.get('output_tokens'),
-            log_data.get('total_cost_usd'),
-            log_data.get('latency_ms'),
-            log_data.get('success', False),
-            log_data.get('error_message'),
-            log_data.get('retry_count', 0),
-            log_data.get('trace_id', ''),
-            log_data.get('prompt_template_version'),
+            log_data.get("profile_id"),
+            log_data["operation"],
+            log_data["llm_provider"],
+            log_data["model_name"],
+            log_data.get("input_tokens"),
+            log_data.get("output_tokens"),
+            log_data.get("total_cost_usd"),
+            log_data.get("latency_ms"),
+            log_data.get("success", False),
+            log_data.get("error_message"),
+            log_data.get("retry_count", 0),
+            log_data.get("trace_id", ""),
+            log_data.get("prompt_template_version"),
         )
         await self.execute_write(query, params)
-        logger.info('llm_call_logged', log_id=log_id, operation=log_data['operation'], provider=log_data['llm_provider'])
+        logger.info(
+            "llm_call_logged", log_id=log_id, operation=log_data["operation"], provider=log_data["llm_provider"]
+        )
         return log_id

@@ -27,7 +27,12 @@ class GapAnalysisJobRepository(MySQLBaseRepository):
             job_data.get("error_message"),
         )
         await self.execute_write(query, params)
-        logger.info("gap_analysis_job_created", job_id=job_id, profile_id=job_data["profile_id"], status=job_data.get("status", "queued"))
+        logger.info(
+            "gap_analysis_job_created",
+            job_id=job_id,
+            profile_id=job_data["profile_id"],
+            status=job_data.get("status", "queued"),
+        )
         return job_id
 
     async def get_job(self, job_id: str) -> dict[str, Any] | None:

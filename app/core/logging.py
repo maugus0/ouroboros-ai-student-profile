@@ -10,9 +10,7 @@ import structlog
 REDACTED = "[REDACTED]"
 _EMAIL_PATTERN = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 _BEARER_PATTERN = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9\-._~+/]+=*")
-_KEY_VALUE_SECRET_PATTERN = re.compile(
-    r"(?i)\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)"
-)
+_KEY_VALUE_SECRET_PATTERN = re.compile(r"(?i)\b(api[_-]?key|token|password|secret|authorization)\s*[:=]\s*([^\s,;]+)")
 
 _SENSITIVE_EXACT_KEYS = {
     "full_name",
