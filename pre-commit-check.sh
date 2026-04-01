@@ -91,11 +91,16 @@ fi
 
 echo ""
 echo "6. Running tests..."
-if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest tests/ -v --tb=short > /dev/null 2>&1; then
+TEST_TARGETS="tests/unit tests/flow"
+if [ "${RUN_INTEGRATION_TESTS:-false}" = "true" ]; then
+    TEST_TARGETS="${TEST_TARGETS} tests/integration"
+fi
+
+if ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest ${TEST_TARGETS} -v --tb=short > /dev/null 2>&1; then
     success "Tests passed"
 else
     error "Tests failed"
-    ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest tests/ -v --tb=short
+    ALLOW_DB_FAILURE=true USE_MOCK_DATA=true X_SERVICE_TOKEN=test-service-token MYSQL_HOST=localhost MYSQL_DATABASE=test_db MYSQL_USER=test_user MYSQL_PASSWORD=test_pass uv run pytest ${TEST_TARGETS} -v --tb=short
     exit 1
 fi
 

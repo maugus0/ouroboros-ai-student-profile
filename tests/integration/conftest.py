@@ -1,6 +1,7 @@
 """Pytest configuration and fixtures for integration tests with real MySQL."""
 
 import os
+from pathlib import Path
 
 import mysql.connector
 import pytest
@@ -17,6 +18,7 @@ if os.path.exists(env_file):
 os.environ["ALLOW_DB_FAILURE"] = "false"
 os.environ["USE_MOCK_DATA"] = "false"
 
+# pylint: disable=wrong-import-position
 from app.config import settings  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -37,8 +39,6 @@ def service_token_header():
 @pytest.fixture(scope="session", autouse=True)
 def setup_integration_db():
     """Set up test database schema before running integration tests."""
-    from pathlib import Path
-
     conn = mysql.connector.connect(
         host=settings.get_db_host(),
         port=settings.get_db_port(),
@@ -62,8 +62,7 @@ def setup_integration_db():
             conn.commit()
 
     # Legacy table used by FieldRepository and some unit/flow test paths.
-    cursor.execute(
-        """
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS profile_fields (
             id VARCHAR(36) PRIMARY KEY,
             profile_id VARCHAR(36) NOT NULL,
@@ -78,8 +77,7 @@ def setup_integration_db():
             INDEX idx_profile_id (profile_id),
             INDEX idx_field_category (field_category)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-        """
-    )
+        """)
     conn.commit()
 
     cursor.close()
@@ -117,7 +115,7 @@ def cleanup_integration_db():
     for table in tables:
         try:
             cursor.execute(f"TRUNCATE TABLE {table}")
-        except Exception:
+        except mysql.connector.Error:
             pass
     conn.commit()
     cursor.close()
