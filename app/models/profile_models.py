@@ -21,6 +21,10 @@ class ParseRequest(BaseModel):
         default=None,
         description="Optional user-provided target degree level",
     )
+    run_gap_analysis: bool = Field(
+        default=False,
+        description="Whether to run automatic gap analysis immediately after profile creation",
+    )
 
 
 class ProfileResponse(BaseModel):

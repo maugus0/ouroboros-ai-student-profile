@@ -8,6 +8,9 @@ from app.core.logging import get_logger
 from app.repositories.mysql_document_repo import DocumentRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
 from app.repositories.mysql_profile_repo import ProfileRepository
+from app.services.document_parser import DocumentParser
+from app.services.gap_analysis_service import GapAnalysisService
+from app.services.llm_service import LLMService
 from app.services.profile_clarification_engine import apply_react_decision_pattern
 from app.services.profile_data_builders import (
     build_education_entries,
@@ -24,9 +27,6 @@ from app.services.profile_value_utils import (
     parse_date_text,
     parse_gpa_value,
 )
-from app.services.document_parser import DocumentParser
-from app.services.gap_analysis_service import GapAnalysisService
-from app.services.llm_service import LLMService
 from app.utils.exceptions import NotFoundError
 from app.utils.file_utils import get_file_extension, get_mime_type
 
@@ -58,6 +58,7 @@ class ProfileService:
         file_content_base64: str,
         document_type: str = "cv",
         target_degree_hint: Optional[str] = None,
+        run_gap_analysis: bool = True,
     ) -> dict[str, Any]:
         """Full pipeline: decode → extract text → LLM parse → store profile + document."""
         overall_start = time.perf_counter()
@@ -140,11 +141,12 @@ class ProfileService:
             logger.warning("normalized_profile_persist_failed", profile_id=profile_id, error=str(exc))
 
         gap_analysis: dict[str, Any] | None = None
-        # 6. Skill gaps are identified automatically right after extraction.
-        try:
-            gap_analysis = await self.gap_service.analyze(profile_id)
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            logger.warning("automatic_gap_analysis_failed", profile_id=profile_id, error=str(exc))
+        # 6. Skill gaps can be identified automatically right after extraction.
+        if run_gap_analysis:
+            try:
+                gap_analysis = await self.gap_service.analyze(profile_id)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
+                logger.warning("automatic_gap_analysis_failed", profile_id=profile_id, error=str(exc))
 
         logger.info("profile_pipeline_completed", profile_id=profile_id, total_ms=total_ms)
 

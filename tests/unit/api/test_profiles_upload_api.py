@@ -25,6 +25,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
     data = {
         "document_type": "cv",
         "target_degree_hint": "master",
+        "run_gap_analysis": "false",
     }
 
     response = client.post(
@@ -41,6 +42,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
     assert payload["data"]["received"]["file_name"] == "cv.pdf"
     assert payload["data"]["received"]["document_type"] == "cv"
     assert payload["data"]["received"]["target_degree_hint"] == "master"
+    assert payload["data"]["received"]["run_gap_analysis"] is False
 
 
 def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_token_header):
@@ -76,6 +78,7 @@ def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_toke
     assert response.status_code == 200
     payload = response.json()
     assert payload["data"]["received"]["document_type"] == "cv"
+    assert payload["data"]["received"]["run_gap_analysis"] is False
 
 
 def test_parse_upload_requires_service_token(client):

@@ -13,6 +13,7 @@ class _FakeFlowProfileService:
         file_content_base64: str,
         document_type: str = "cv",
         target_degree_hint: str | None = None,
+        run_gap_analysis: bool = True,
     ):
         profile_id = "sim-profile-1"
         self._profiles[profile_id] = {
@@ -33,6 +34,7 @@ class _FakeFlowProfileService:
             "file_name": file_name,
             "document_type": document_type,
             "target_degree_hint": target_degree_hint,
+            "run_gap_analysis": run_gap_analysis,
             "file_content_base64": file_content_base64,
         }
         return self._profiles[profile_id]

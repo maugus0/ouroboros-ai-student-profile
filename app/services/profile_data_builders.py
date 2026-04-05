@@ -6,7 +6,9 @@ import re
 from typing import Any
 
 
-def build_profile_fields(profile_id: str, source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
+def build_profile_fields(
+    profile_id: str, source_document_id: str, profile_data: dict[str, Any]
+) -> list[dict[str, Any]]:
     """Flatten extracted profile JSON into profile_fields records."""
     field_categories = {
         "full_name": "personal",
@@ -192,7 +194,9 @@ def build_experience_entries(source_document_id: str, profile_data: dict[str, An
     work_confidence = _coerce_confidence(confidence_map.get("work_experience"))
     research_confidence = _coerce_confidence(confidence_map.get("research_experience"))
 
-    work_experience = profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+    work_experience = (
+        profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
+    )
     for index, item in enumerate(work_experience):
         if not isinstance(item, dict):
             continue

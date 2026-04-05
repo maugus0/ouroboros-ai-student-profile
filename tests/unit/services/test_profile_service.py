@@ -203,6 +203,80 @@ async def test_parse_and_create_profile_runs_auto_gap_analysis():
 
 
 @pytest.mark.asyncio
+async def test_parse_and_create_profile_skips_auto_gap_analysis_when_disabled():
+    service = ProfileService()
+
+    class _StubParser:
+        async def extract_text(self, _file_content_base64, _file_name):
+            return {
+                "text": "Student CV",
+                "file_size_bytes": 123,
+                "file_hash": "abc",
+                "extracted_text_length": 10,
+                "ocr_used": False,
+                "extraction_method": "pdfplumber",
+                "extraction_time_ms": 10,
+            }
+
+    class _StubLLMService:
+        async def extract_profile(self, _document_text, _target_degree_hint=None):
+            return LLMExtractionResult(
+                profile_data={
+                    "full_name": "Jane Doe",
+                    "technical_skills": ["Python"],
+                    "education": [{"institution": "NUS", "degree": "BSc"}],
+                    "work_experience": [{"company": "A", "position": "Engineer"}],
+                    "research_experience": [],
+                    "target_degree_level": "master",
+                    "current_degree_level": "bachelor",
+                    "target_degree_confidence": 0.8,
+                    "target_degree_source": "trajectory_inference",
+                },
+                provider="openai",
+                model="gpt-test",
+            )
+
+    class _StubNormalizedRepo:
+        async def replace_extracted_skills(self, _profile_id, _rows):
+            return None
+
+        async def replace_education_entries(self, _profile_id, _rows):
+            return None
+
+        async def replace_experience_entries(self, _profile_id, _rows):
+            return None
+
+        async def create_profile_version_snapshot(self, _profile_id, _version_number, _profile_json, _change_reason):
+            return "ver-1"
+
+    class _StubGapService:
+        def __init__(self):
+            self.called = False
+
+        async def analyze(self, _profile_id):
+            self.called = True
+            return {"readiness_score": 0.7, "readiness_signals": []}
+
+    gap_service = _StubGapService()
+    service.profile_repo = FakeProfileRepository()
+    service.document_repo = FakeDocumentRepository()
+    service.normalized_repo = _StubNormalizedRepo()
+    service.parser = _StubParser()
+    service.llm_service = _StubLLMService()
+    service.gap_service = gap_service
+
+    result = await service.parse_and_create_profile(
+        file_name="cv.pdf",
+        file_content_base64="dGVzdA==",
+        document_type="cv",
+        run_gap_analysis=False,
+    )
+
+    assert result["gap_analysis"] is None
+    assert gap_service.called is False
+
+
+@pytest.mark.asyncio
 async def test_update_profile_increments_profile_version():
     service = ProfileService()
 

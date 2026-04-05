@@ -134,7 +134,9 @@ def apply_react_decision_pattern(profile_data: dict[str, Any]) -> dict[str, Any]
         if field not in decision_trace:
             decision_trace[field] = {"decision": "clarify", "reason": "missing_or_unknown"}
 
-    target_degree_normalized = normalize_degree_level_value("target_degree_level", normalized.get("target_degree_level"))
+    target_degree_normalized = normalize_degree_level_value(
+        "target_degree_level", normalized.get("target_degree_level")
+    )
     publications = normalized.get("publications")
     has_publications = isinstance(publications, list) and len(publications) > 0
     publications_confidence = confidence_map.get("publications")

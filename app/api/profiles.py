@@ -1,7 +1,6 @@
 """Profile API endpoints — called by the orchestrator only."""
 
 import base64
-from functools import lru_cache
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 
@@ -15,14 +14,16 @@ from app.services.profile_service import ProfileService
 router = APIRouter(prefix="/api/v1/profiles", tags=["Profiles"], dependencies=[Depends(require_service_token)])
 
 
-@lru_cache(maxsize=1)
+_profile_service = ProfileService()
+_gap_service = GapAnalysisService()
+
+
 def get_profile_service() -> ProfileService:
-    return ProfileService()
+    return _profile_service
 
 
-@lru_cache(maxsize=1)
 def get_gap_service() -> GapAnalysisService:
-    return GapAnalysisService()
+    return _gap_service
 
 
 @router.post("/parse")
@@ -33,6 +34,7 @@ async def parse_document(body: ParseRequest, profile_service: ProfileService = D
         file_content_base64=body.file_content_base64,
         document_type=body.document_type,
         target_degree_hint=body.target_degree_hint,
+        run_gap_analysis=body.run_gap_analysis,
     )
     return StandardResponse(message="Profile created", data=result)
 
@@ -42,6 +44,7 @@ async def parse_document_upload(
     user_id: str | None = Form(default=None),
     document_type: str = Form(default="cv"),
     target_degree_hint: str | None = Form(default=None),
+    run_gap_analysis: bool = Form(default=False),
     file: UploadFile = File(...),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
@@ -65,6 +68,7 @@ async def parse_document_upload(
         file_content_base64=file_content_base64,
         document_type=document_type,
         target_degree_hint=target_degree_hint,
+        run_gap_analysis=run_gap_analysis,
     )
     return StandardResponse(message="Profile created", data=result)
 
@@ -126,7 +130,7 @@ async def get_profile_gaps(profile_id: str, gap_service: GapAnalysisService = De
 
 
 @router.post("/{profile_id}/gap-analysis")
-async def run_gap_analysis(profile_id: str, gap_service: GapAnalysisService = Depends(get_gap_service)):
+async def trigger_gap_analysis(profile_id: str, gap_service: GapAnalysisService = Depends(get_gap_service)):
     """Trigger a gap analysis on an existing profile."""
     result = await gap_service.analyze(profile_id)
     return StandardResponse(data=result)
