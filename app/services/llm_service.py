@@ -26,8 +26,8 @@ GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v2"
 class LLMService:
     """Orchestrates LLM calls with primary -> fallback provider logic."""
 
-    def __init__(self):
-        self.llm_log_repo = LLMCallLogRepository()
+    def __init__(self, llm_log_repo: LLMCallLogRepository | None = None):
+        self.llm_log_repo = llm_log_repo or LLMCallLogRepository()
 
     async def extract_profile(
         self, document_text: str, target_degree_hint: Optional[str] = None

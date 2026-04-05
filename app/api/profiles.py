@@ -1,6 +1,7 @@
 """Profile API endpoints — called by the orchestrator only."""
 
 import base64
+from functools import lru_cache
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 
@@ -13,14 +14,21 @@ from app.services.profile_service import ProfileService
 
 router = APIRouter(prefix="/api/v1/profiles", tags=["Profiles"], dependencies=[Depends(require_service_token)])
 
-_profile_service = ProfileService()
-_gap_service = GapAnalysisService()
+
+@lru_cache(maxsize=1)
+def get_profile_service() -> ProfileService:
+    return ProfileService()
+
+
+@lru_cache(maxsize=1)
+def get_gap_service() -> GapAnalysisService:
+    return GapAnalysisService()
 
 
 @router.post("/parse")
-async def parse_document(body: ParseRequest):
+async def parse_document(body: ParseRequest, profile_service: ProfileService = Depends(get_profile_service)):
     """Accept a document from the orchestrator, parse it, and create a profile."""
-    result = await _profile_service.parse_and_create_profile(
+    result = await profile_service.parse_and_create_profile(
         file_name=body.file_name,
         file_content_base64=body.file_content_base64,
         document_type=body.document_type,
@@ -35,6 +43,7 @@ async def parse_document_upload(
     document_type: str = Form(default="cv"),
     target_degree_hint: str | None = Form(default=None),
     file: UploadFile = File(...),
+    profile_service: ProfileService = Depends(get_profile_service),
 ):
     """Accept streamed multipart upload and create a profile.
 
@@ -51,7 +60,7 @@ async def parse_document_upload(
     raw_bytes = await _read_upload_bytes(file)
     file_content_base64 = base64.b64encode(raw_bytes).decode("utf-8")
 
-    result = await _profile_service.parse_and_create_profile(
+    result = await profile_service.parse_and_create_profile(
         file_name=file.filename or "uploaded_file",
         file_content_base64=file_content_base64,
         document_type=document_type,
@@ -61,9 +70,9 @@ async def parse_document_upload(
 
 
 @router.get("/{profile_id}")
-async def get_profile(profile_id: str):
+async def get_profile(profile_id: str, profile_service: ProfileService = Depends(get_profile_service)):
     """Retrieve a single student profile."""
-    profile = await _profile_service.get_profile(profile_id)
+    profile = await profile_service.get_profile(profile_id)
     return StandardResponse(data=profile)
 
 
@@ -71,77 +80,97 @@ async def get_profile(profile_id: str):
 async def list_profiles(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
+    profile_service: ProfileService = Depends(get_profile_service),
 ):
     """List profiles with pagination."""
-    result = await _profile_service.list_profiles(page=page, page_size=page_size)
+    result = await profile_service.list_profiles(page=page, page_size=page_size)
     return StandardResponse(data=result)
 
 
 @router.patch("/{profile_id}")
-async def update_profile(profile_id: str, body: ProfileUpdate):
+async def update_profile(
+    profile_id: str,
+    body: ProfileUpdate,
+    profile_service: ProfileService = Depends(get_profile_service),
+):
     """Update specific fields on a profile."""
     updates = body.model_dump(exclude_unset=True)
-    profile = await _profile_service.update_profile(profile_id, updates)
+    profile = await profile_service.update_profile(profile_id, updates)
     return StandardResponse(message="Profile updated", data=profile)
 
 
 @router.put("/{profile_id}")
-async def replace_profile(profile_id: str, body: ProfileUpdate):
+async def replace_profile(
+    profile_id: str,
+    body: ProfileUpdate,
+    profile_service: ProfileService = Depends(get_profile_service),
+):
     """Update profile fields (idempotent full-update style endpoint)."""
     updates = body.model_dump(exclude_unset=True)
-    profile = await _profile_service.update_profile(profile_id, updates)
+    profile = await profile_service.update_profile(profile_id, updates)
     return StandardResponse(message="Profile updated", data=profile)
 
 
 @router.get("/{profile_id}/skills")
-async def get_profile_skills(profile_id: str):
+async def get_profile_skills(profile_id: str, profile_service: ProfileService = Depends(get_profile_service)):
     """Retrieve normalized skills extracted for a profile."""
-    result = await _profile_service.get_profile_skills(profile_id)
+    result = await profile_service.get_profile_skills(profile_id)
     return StandardResponse(data=result)
 
 
 @router.get("/{profile_id}/gaps")
-async def get_profile_gaps(profile_id: str):
+async def get_profile_gaps(profile_id: str, gap_service: GapAnalysisService = Depends(get_gap_service)):
     """Retrieve the latest stored gap-analysis snapshot for a profile."""
-    result = await _gap_service.get_latest_analysis(profile_id)
+    result = await gap_service.get_latest_analysis(profile_id)
     return StandardResponse(data=result)
 
 
 @router.post("/{profile_id}/gap-analysis")
-async def run_gap_analysis(profile_id: str):
+async def run_gap_analysis(profile_id: str, gap_service: GapAnalysisService = Depends(get_gap_service)):
     """Trigger a gap analysis on an existing profile."""
-    result = await _gap_service.analyze(profile_id)
+    result = await gap_service.analyze(profile_id)
     return StandardResponse(data=result)
 
 
 @router.get("/{profile_id}/clarifications")
-async def get_profile_clarifications(profile_id: str):
+async def get_profile_clarifications(
+    profile_id: str,
+    profile_service: ProfileService = Depends(get_profile_service),
+):
     """Return unresolved clarifications and readiness state for a profile."""
-    result = await _profile_service.get_clarifications(profile_id)
+    result = await profile_service.get_clarifications(profile_id)
     return StandardResponse(data=result)
 
 
 @router.post("/{profile_id}/clarifications")
-async def submit_profile_clarifications(profile_id: str, body: ClarificationSubmitRequest):
+async def submit_profile_clarifications(
+    profile_id: str,
+    body: ClarificationSubmitRequest,
+    profile_service: ProfileService = Depends(get_profile_service),
+):
     """Apply clarification answers and update profile readiness state."""
     answers = [item.model_dump() for item in body.answers]
-    result = await _profile_service.submit_clarifications(profile_id, answers)
+    result = await profile_service.submit_clarifications(profile_id, answers)
     return StandardResponse(message="Clarifications submitted", data=result)
 
 
 @router.post("/{profile_id}/gap-analysis/jobs")
-async def create_gap_analysis_job(profile_id: str, background_tasks: BackgroundTasks):
+async def create_gap_analysis_job(
+    profile_id: str,
+    background_tasks: BackgroundTasks,
+    gap_service: GapAnalysisService = Depends(get_gap_service),
+):
     """Create async gap-analysis job; queued jobs are processed in background."""
-    job = await _gap_service.create_gap_job(profile_id)
+    job = await gap_service.create_gap_job(profile_id)
     if job["status"] == "queued":
-        background_tasks.add_task(_gap_service.process_gap_job, job["job_id"], profile_id)
+        background_tasks.add_task(gap_service.process_gap_job, job["job_id"], profile_id)
     return StandardResponse(message="Gap analysis job created", data=job)
 
 
 @router.get("/gap-analysis/jobs/{job_id}")
-async def get_gap_analysis_job(job_id: str):
+async def get_gap_analysis_job(job_id: str, gap_service: GapAnalysisService = Depends(get_gap_service)):
     """Get async gap-analysis job status and result snapshot."""
-    job = await _gap_service.get_gap_job(job_id)
+    job = await gap_service.get_gap_job(job_id)
     return StandardResponse(data=job)
 
 

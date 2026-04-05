@@ -18,12 +18,19 @@ logger = get_logger(__name__)
 class GapAnalysisService:
     """Identifies readiness gaps for a student's target degree level."""
 
-    def __init__(self):
-        self.profile_repo = ProfileRepository()
-        self.normalized_repo = ProfileNormalizedRepository()
-        self.gap_job_repo = GapAnalysisJobRepository()
-        self.gap_repo = GapAnalysisRepository()
-        self.llm_service = LLMService()
+    def __init__(
+        self,
+        profile_repo: ProfileRepository | None = None,
+        normalized_repo: ProfileNormalizedRepository | None = None,
+        gap_job_repo: GapAnalysisJobRepository | None = None,
+        gap_repo: GapAnalysisRepository | None = None,
+        llm_service: LLMService | None = None,
+    ):
+        self.profile_repo = profile_repo or ProfileRepository()
+        self.normalized_repo = normalized_repo or ProfileNormalizedRepository()
+        self.gap_job_repo = gap_job_repo or GapAnalysisJobRepository()
+        self.gap_repo = gap_repo or GapAnalysisRepository()
+        self.llm_service = llm_service or LLMService()
 
     async def analyze(self, profile_id: str) -> dict[str, Any]:
         """Run gap analysis on an existing profile."""

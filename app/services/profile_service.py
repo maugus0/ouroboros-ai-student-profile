@@ -1,16 +1,29 @@
 """Profile orchestration - parse document -> LLM extract -> store."""
 
-import hashlib
-import json
-import re
 import time
-from datetime import date, datetime
+from datetime import date
 from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.repositories.mysql_document_repo import DocumentRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
 from app.repositories.mysql_profile_repo import ProfileRepository
+from app.services.profile_clarification_engine import apply_react_decision_pattern
+from app.services.profile_data_builders import (
+    build_education_entries,
+    build_experience_entries,
+    build_normalized_skills,
+    build_profile_fields,
+    entry_fingerprint,
+    normalize_skill_name,
+)
+from app.services.profile_value_utils import (
+    coerce_top_level_value,
+    normalize_degree_level_value,
+    normalize_field_name,
+    parse_date_text,
+    parse_gpa_value,
+)
 from app.services.document_parser import DocumentParser
 from app.services.gap_analysis_service import GapAnalysisService
 from app.services.llm_service import LLMService
@@ -23,13 +36,21 @@ logger = get_logger(__name__)
 class ProfileService:
     """High-level business logic for student profiles."""
 
-    def __init__(self):
-        self.profile_repo = ProfileRepository()
-        self.document_repo = DocumentRepository()
-        self.normalized_repo = ProfileNormalizedRepository()
-        self.parser = DocumentParser()
-        self.llm_service = LLMService()
-        self.gap_service = GapAnalysisService()
+    def __init__(
+        self,
+        profile_repo: ProfileRepository | None = None,
+        document_repo: DocumentRepository | None = None,
+        normalized_repo: ProfileNormalizedRepository | None = None,
+        parser: DocumentParser | None = None,
+        llm_service: LLMService | None = None,
+        gap_service: GapAnalysisService | None = None,
+    ):
+        self.profile_repo = profile_repo or ProfileRepository()
+        self.document_repo = document_repo or DocumentRepository()
+        self.normalized_repo = normalized_repo or ProfileNormalizedRepository()
+        self.parser = parser or DocumentParser()
+        self.llm_service = llm_service or LLMService()
+        self.gap_service = gap_service or GapAnalysisService()
 
     async def parse_and_create_profile(
         self,
@@ -232,6 +253,9 @@ class ProfileService:
 
             # Keep clarification queue/trace consistent with latest snapshot values.
             snapshot_profile_json = self._apply_react_decision_pattern(merged_profile_json)
+            clean["target_degree_needs_clarification"] = bool(
+                snapshot_profile_json.get("target_degree_needs_clarification")
+            )
 
             try:
                 await self.normalized_repo.create_profile_version_snapshot(
@@ -334,12 +358,14 @@ class ProfileService:
             updated_profile_data["target_degree_source"] = "user_input"
             updated_profile_data["target_degree_confidence"] = 1.0
             updated_profile_data["target_degree_reasoning"] = "Provided via clarification answer"
-        updated_profile_data["target_degree_needs_clarification"] = bool(updated_queue)
+        updated_profile_data["target_degree_needs_clarification"] = bool(
+            updated_profile_data.get("target_degree_needs_clarification")
+        )
 
         # Only update scalar columns in student_profiles; profile state lives in profile_versions
         next_version = int(row.get("profile_version") or 1) + 1
         updates: dict[str, Any] = {
-            "target_degree_needs_clarification": bool(updated_queue),
+            "target_degree_needs_clarification": bool(updated_profile_data.get("target_degree_needs_clarification")),
             "profile_version": next_version,
         }
         for source_field, target_field in top_level_mapping.items():
@@ -416,587 +442,50 @@ class ProfileService:
 
     @staticmethod
     def _coerce_top_level_value(field: str, value: Any) -> Any:
-        """Convert clarification value for strict DB columns; return None to skip DB write."""
-        if value is None:
-            return None
-
-        if field == "date_of_birth":
-            if isinstance(value, date):
-                return value
-            if isinstance(value, datetime):
-                return value.date()
-            if isinstance(value, str):
-                return ProfileService._parse_date_text(value)
-            return None
-
-        if field in {"gpa_highest", "gpa_scale"}:
-            try:
-                return float(value)
-            except (TypeError, ValueError):
-                return None
-
-        if field in {"current_degree_level", "target_degree_level"}:
-            return ProfileService._normalize_degree_level_value(field, value)
-
-        return value
+        return coerce_top_level_value(field, value)
 
     @staticmethod
     def _normalize_field_name(field: Any) -> str:
-        if field is None:
-            return ""
-
-        text = str(field).strip().lower().replace("-", "_").replace(" ", "_")
-        aliases = {
-            "dob": "date_of_birth",
-            "birth_date": "date_of_birth",
-            "target_degree": "target_degree_level",
-            "current_degree": "current_degree_level",
-            "gpa": "gpa_highest",
-            "highest_gpa": "gpa_highest",
-        }
-        return aliases.get(text, text)
+        return normalize_field_name(field)
 
     @staticmethod
     def _parse_gpa_value(value: Any) -> tuple[Optional[float], Optional[float]]:
-        """Parse GPA values from scalar or ratio text (e.g., '4.0/5.0')."""
-        if value is None:
-            return None, None
-
-        if isinstance(value, (int, float)):
-            return float(value), None
-
-        text = str(value).strip()
-        if not text:
-            return None, None
-
-        ratio_match = re.match(r"^(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)$", text)
-        if ratio_match:
-            return float(ratio_match.group(1)), float(ratio_match.group(2))
-
-        try:
-            return float(text), None
-        except ValueError:
-            return None, None
+        return parse_gpa_value(value)
 
     @staticmethod
     def _normalize_degree_level_value(field: str, value: Any) -> Optional[str]:
-        text = str(value or "").strip().lower()
-        if not text:
-            return None
-
-        if "phd" in text or "doctor" in text:
-            return "phd"
-        if "master" in text:
-            return "master"
-        if "bachelor" in text or re.search(r"\bbs\b|\bba\b|\bbsc\b", text):
-            return "bachelor"
-        if field == "current_degree_level" and ("high school" in text or "high_school" in text or text == "highschool"):
-            return "high_school"
-        if text == "unknown":
-            return "unknown"
-        return None
+        return normalize_degree_level_value(field, value)
 
     @staticmethod
     def _parse_date_text(value: str) -> Optional[date]:
-        text = value.strip()
-        if not text:
-            return None
-
-        formats = (
-            "%Y-%m-%d",
-            "%d %b %Y",
-            "%d %B %Y",
-            "%b %d %Y",
-            "%B %d %Y",
-            "%d/%m/%Y",
-            "%d-%m-%Y",
-            "%m/%d/%Y",
-        )
-        for fmt in formats:
-            try:
-                return datetime.strptime(text, fmt).date()
-            except ValueError:
-                continue
-        return None
+        return parse_date_text(value)
 
     @classmethod
     def _apply_react_decision_pattern(cls, profile_data: dict[str, Any]) -> dict[str, Any]:
-        """Apply an internal Reason-Act-Observe pass for all fields requiring clarification.
-
-        Reason: Evaluate if fields are missing, contradictory, or low-confidence.
-        Act: Mark fields that need clarification in the decision trace.
-        Observe: Derive the clarification queue from the decision trace (single source of truth).
-        """
-        normalized = dict(profile_data or {})
-
-        confidence_map = normalized.get("confidence_map") if isinstance(normalized.get("confidence_map"), dict) else {}
-        contradiction_flags = (
-            normalized.get("contradiction_flags") if isinstance(normalized.get("contradiction_flags"), list) else []
-        )
-
-        contradicted_fields: set[str] = set()
-        for item in contradiction_flags:
-            if not isinstance(item, dict):
-                continue
-            field = cls._normalize_field_name(item.get("field") or item.get("field_name"))
-            if field:
-                contradicted_fields.add(field)
-
-        # Define rules for critical fields
-        critical_rules = {
-            "full_name": {
-                "question": "What is your full name?",
-                "min_confidence": 0.75,
-                "require_when_missing": False,
-            },
-            "email": {
-                "question": "What is your email address?",
-                "min_confidence": 0.75,
-                "require_when_missing": False,
-            },
-            "current_degree_level": {
-                "question": "What is your current degree level?",
-                "min_confidence": 0.7,
-                "require_when_missing": True,
-            },
-            "target_degree_level": {
-                "question": "What is your target degree level?",
-                "min_confidence": 0.7,
-                "require_when_missing": True,
-            },
-            "gpa_highest": {
-                "question": "What is your highest GPA?",
-                "min_confidence": 0.65,
-                "require_when_missing": False,
-            },
-        }
-
-        # Default questions for non-critical fields
-        default_questions = {
-            "publications": "Do you have publications? Please provide title, venue, and year if available.",
-            "phone": "What is your phone number?",
-            "nationality": "What is your nationality?",
-            "date_of_birth": "What is your date of birth?",
-            "gpa_scale": "What GPA scale is used?",
-        }
-
-        decision_trace: dict[str, Any] = {}
-
-        # Evaluate critical fields
-        for field, rule in critical_rules.items():
-            value = normalized.get(field)
-            reason = None
-
-            if field in {"current_degree_level", "target_degree_level"}:
-                normalized_degree = cls._normalize_degree_level_value(field, value)
-                if normalized_degree is None or normalized_degree == "unknown":
-                    reason = "missing_or_unknown"
-            else:
-                is_missing = value is None or (isinstance(value, str) and not value.strip())
-                if is_missing and rule["require_when_missing"]:
-                    reason = "missing_or_unknown"
-
-            if reason is None and field in contradicted_fields:
-                reason = "contradiction_detected"
-
-            if reason is None and field in confidence_map:
-                try:
-                    confidence = float(confidence_map[field])
-                    min_confidence = rule.get("min_confidence")
-                    if isinstance(min_confidence, (int, float)) and confidence < float(min_confidence):
-                        reason = "low_confidence"
-                except (TypeError, ValueError):
-                    reason = "invalid_confidence"
-
-            if reason is None:
-                decision_trace[field] = {"decision": "accept"}
-            else:
-                decision_trace[field] = {"decision": "clarify", "reason": reason}
-
-        # CRITICAL: Check if current_degree == target_degree (ambiguous case)
-        current_normalized = cls._normalize_degree_level_value(
-            "current_degree_level", normalized.get("current_degree_level")
-        )
-        target_normalized = cls._normalize_degree_level_value(
-            "target_degree_level", normalized.get("target_degree_level")
-        )
-
-        if (
-            current_normalized not in {None, "unknown"}
-            and target_normalized not in {None, "unknown"}
-            and current_normalized == target_normalized
-        ):
-            # Current degree matches inferred target → ambiguous, flag for clarification
-            decision_trace["target_degree_level"] = {
-                "decision": "clarify",
-                "reason": "ambiguous_current_equals_target",
-            }
-
-        # Evaluate fields from incoming clarification_queue or missing_critical_fields.
-        # Skip fields already answered by user (confidence = 1.0).
-        fields_to_check = set()
-
-        # Add fields from incoming queue (but skip if already answered by user with confidence = 1.0)
-        queue = list(normalized.get("clarification_queue") or [])
-        for item in queue:
-            if isinstance(item, dict):
-                field = cls._normalize_field_name(item.get("field"))
-                if field:
-                    # Only add to check if not already answered by user
-                    field_confidence = confidence_map.get(field)
-                    try:
-                        is_user_answered = field_confidence is not None and float(field_confidence) == 1.0
-                    except (TypeError, ValueError):
-                        is_user_answered = False
-
-                    if not is_user_answered:
-                        fields_to_check.add(field)
-
-        # Add fields from missing_critical_fields
-        missing_fields = list(normalized.get("missing_critical_fields") or [])
-        for field in missing_fields:
-            field_norm = cls._normalize_field_name(field)
-            if field_norm:
-                fields_to_check.add(field_norm)
-
-        # Evaluate non-critical fields (only if they're in the queue or missing_critical_fields)
-        for field in fields_to_check:
-            if field not in decision_trace:
-                decision_trace[field] = {"decision": "clarify", "reason": "missing_or_unknown"}
-
-        # Publications clarification is required for PhD candidates when missing.
-        # If explicitly answered by user (confidence = 1.0), mark as accepted in decision trace.
-        target_degree_normalized = cls._normalize_degree_level_value(
-            "target_degree_level", normalized.get("target_degree_level")
-        )
-        publications = normalized.get("publications")
-        has_publications = isinstance(publications, list) and len(publications) > 0
-        publications_confidence = confidence_map.get("publications")
-
-        # Check if publications has been explicitly answered by user (confidence = 1.0)
-        publications_already_answered = False
-        if publications_confidence is not None:
-            try:
-                is_user_answered = float(publications_confidence) == 1.0
-                publications_already_answered = is_user_answered
-            except (TypeError, ValueError):
-                pass
-
-        # Keep publications visible in trace once answered, even when queue becomes empty.
-        if publications_already_answered and "publications" not in decision_trace:
-            decision_trace["publications"] = {"decision": "accept"}
-
-        if (
-            target_degree_normalized == "phd"
-            and not has_publications
-            and not publications_already_answered
-            and "publications" not in decision_trace
-        ):
-            decision_trace["publications"] = {"decision": "clarify", "reason": "missing_or_unknown"}
-
-        # Derive the clarification queue from decision_trace (fields with "decision": "clarify")
-        new_queue: list[dict[str, Any]] = []
-        for field, trace_entry in decision_trace.items():
-            if isinstance(trace_entry, dict) and trace_entry.get("decision") == "clarify":
-                question = critical_rules.get(field, {}).get("question") or default_questions.get(
-                    field, f"Please provide your {field.replace('_', ' ')}."
-                )
-                new_queue.append({"field": field, "question": question})
-
-        normalized["clarification_queue"] = new_queue
-        normalized.pop("missing_critical_fields", None)
-        normalized["react_decision_trace"] = decision_trace
-        normalized["target_degree_needs_clarification"] = bool(new_queue)
-        return normalized
+        return apply_react_decision_pattern(profile_data)
 
     @staticmethod
     def _build_profile_fields(
         profile_id: str, source_document_id: str, profile_data: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """Flatten extracted profile JSON into profile_fields records.
-
-        Array-heavy fields are persisted in dedicated normalized tables to avoid
-        storing the same payload in multiple places.
-        """
-        field_categories = {
-            "full_name": "personal",
-            "email": "personal",
-            "phone": "personal",
-            "nationality": "personal",
-            "date_of_birth": "personal",
-            "target_degree_level": "academic",
-            "current_degree_level": "academic",
-            "target_degree_confidence": "academic",
-            "target_degree_source": "academic",
-            "target_degree_needs_clarification": "academic",
-            "target_degree_reasoning": "academic",
-            "gpa_highest": "academic",
-            "gpa_scale": "academic",
-            "publications": "research",
-            "languages": "skills",
-            "certifications": "skills",
-            "research_interests": "research",
-        }
-
-        confidence_map = profile_data.get("confidence_map") or {}
-        evidence_map = profile_data.get("evidence_map") or {}
-
-        rows: list[dict[str, Any]] = []
-        for field_name, category in field_categories.items():
-            value = profile_data.get(field_name)
-            if value is None:
-                continue
-            if isinstance(value, str) and not value.strip():
-                continue
-            if isinstance(value, (list, dict)) and not value:
-                continue
-
-            raw_confidence = confidence_map.get(field_name)
-            confidence_score = None
-            if raw_confidence is not None:
-                try:
-                    parsed = float(raw_confidence)
-                    if 0.0 <= parsed <= 1.0:
-                        confidence_score = parsed
-                except (TypeError, ValueError):
-                    confidence_score = None
-
-            evidence = evidence_map.get(field_name)
-            evidence_snippet = None
-            if isinstance(evidence, str) and evidence.strip():
-                evidence_snippet = evidence.strip()
-
-            rows.append(
-                {
-                    "profile_id": profile_id,
-                    "field_category": category,
-                    "field_name": field_name,
-                    "field_value": value,
-                    "confidence_score": confidence_score,
-                    "evidence_snippet": evidence_snippet,
-                    "source_document_id": source_document_id,
-                }
-            )
-
-        return rows
+        return build_profile_fields(profile_id, source_document_id, profile_data)
 
     @staticmethod
     def _normalize_skill_name(skill: str) -> str:
-        """Normalize skill labels for consistent indexing."""
-        normalized = re.sub(r"\s+", " ", skill.strip().lower())
-        normalized = normalized.replace("python3", "python").replace("py3", "python")
-        return normalized
+        return normalize_skill_name(skill)
 
     @classmethod
     def _build_normalized_skills(cls, source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
-        skills = profile_data.get("technical_skills") if isinstance(profile_data.get("technical_skills"), list) else []
-        confidence_map = (
-            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
-        )
-        confidence = confidence_map.get("technical_skills")
-        confidence_score = None
-        if confidence is not None:
-            try:
-                parsed = float(confidence)
-                if 0.0 <= parsed <= 1.0:
-                    confidence_score = parsed
-            except (TypeError, ValueError):
-                confidence_score = None
-
-        dedup: dict[str, str] = {}
-        for item in skills:
-            raw_skill = str(item).strip()
-            if not raw_skill:
-                continue
-            normalized = cls._normalize_skill_name(raw_skill)
-            if not normalized:
-                continue
-            dedup.setdefault(normalized, raw_skill)
-
-        rows: list[dict[str, Any]] = []
-        for normalized, raw in dedup.items():
-            rows.append(
-                {
-                    "raw_skill": raw,
-                    "normalized_skill": normalized,
-                    "confidence_score": confidence_score,
-                    "source_document_id": source_document_id,
-                }
-            )
-        return rows
+        return build_normalized_skills(source_document_id, profile_data)
 
     @staticmethod
     def _build_education_entries(source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
-        education = profile_data.get("education") if isinstance(profile_data.get("education"), list) else []
-        confidence_map = (
-            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
-        )
-        evidence_map = profile_data.get("evidence_map") if isinstance(profile_data.get("evidence_map"), dict) else {}
-        confidence_score = confidence_map.get("education")
-        parsed_confidence = None
-        try:
-            if confidence_score is not None:
-                score = float(confidence_score)
-                if 0.0 <= score <= 1.0:
-                    parsed_confidence = score
-        except (TypeError, ValueError):
-            parsed_confidence = None
-
-        rows: list[dict[str, Any]] = []
-        seen_fingerprints: set[str] = set()
-        for index, item in enumerate(education):
-            if not isinstance(item, dict):
-                continue
-            institution = str(item.get("institution") or "").strip()
-            degree = str(item.get("degree") or "").strip()
-            if not institution or not degree:
-                continue
-            row = {
-                "institution": institution,
-                "degree": degree,
-                "field_of_study": item.get("field_of_study"),
-                "start_date": item.get("start_date"),
-                "end_date": item.get("end_date"),
-                "gpa": item.get("gpa"),
-                "gpa_scale": item.get("gpa_scale"),
-                "achievements": item.get("achievements") if isinstance(item.get("achievements"), list) else [],
-                "evidence_snippet": evidence_map.get("education"),
-                "confidence_score": parsed_confidence,
-                "source_document_id": source_document_id,
-                "sort_index": index,
-            }
-            fingerprint = ProfileService._entry_fingerprint(
-                row,
-                keys=[
-                    "institution",
-                    "degree",
-                    "field_of_study",
-                    "start_date",
-                    "end_date",
-                    "gpa",
-                    "gpa_scale",
-                    "achievements",
-                ],
-            )
-            if fingerprint in seen_fingerprints:
-                continue
-            seen_fingerprints.add(fingerprint)
-            row["entry_fingerprint"] = fingerprint
-            rows.append(row)
-        return rows
+        return build_education_entries(source_document_id, profile_data)
 
     @staticmethod
     def _build_experience_entries(source_document_id: str, profile_data: dict[str, Any]) -> list[dict[str, Any]]:
-        confidence_map = (
-            profile_data.get("confidence_map") if isinstance(profile_data.get("confidence_map"), dict) else {}
-        )
-        evidence_map = profile_data.get("evidence_map") if isinstance(profile_data.get("evidence_map"), dict) else {}
-
-        def _coerce_confidence(value: Any) -> float | None:
-            try:
-                if value is None:
-                    return None
-                parsed = float(value)
-                if 0.0 <= parsed <= 1.0:
-                    return parsed
-            except (TypeError, ValueError):
-                return None
-            return None
-
-        rows: list[dict[str, Any]] = []
-        seen_fingerprints: set[str] = set()
-        work_confidence = _coerce_confidence(confidence_map.get("work_experience"))
-        research_confidence = _coerce_confidence(confidence_map.get("research_experience"))
-
-        work_experience = (
-            profile_data.get("work_experience") if isinstance(profile_data.get("work_experience"), list) else []
-        )
-        for index, item in enumerate(work_experience):
-            if not isinstance(item, dict):
-                continue
-            company = str(item.get("company") or "").strip()
-            position = str(item.get("position") or "").strip()
-            if not company or not position:
-                continue
-            row = {
-                "experience_type": "work",
-                "organization": company,
-                "title": position,
-                "role": None,
-                "start_date": item.get("start_date"),
-                "end_date": item.get("end_date"),
-                "description": item.get("description"),
-                "skills_used": item.get("skills_used") if isinstance(item.get("skills_used"), list) else [],
-                "publication_venue": None,
-                "evidence_snippet": evidence_map.get("work_experience"),
-                "confidence_score": work_confidence,
-                "source_document_id": source_document_id,
-                "sort_index": index,
-            }
-            fingerprint = ProfileService._entry_fingerprint(
-                row,
-                keys=[
-                    "experience_type",
-                    "organization",
-                    "title",
-                    "start_date",
-                    "end_date",
-                    "description",
-                    "skills_used",
-                ],
-            )
-            if fingerprint in seen_fingerprints:
-                continue
-            seen_fingerprints.add(fingerprint)
-            row["entry_fingerprint"] = fingerprint
-            rows.append(row)
-
-        research_experience = (
-            profile_data.get("research_experience") if isinstance(profile_data.get("research_experience"), list) else []
-        )
-        for index, item in enumerate(research_experience):
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title") or "").strip()
-            if not title:
-                continue
-            row = {
-                "experience_type": "research",
-                "organization": None,
-                "title": title,
-                "role": item.get("role"),
-                "start_date": item.get("date"),
-                "end_date": None,
-                "description": item.get("description"),
-                "skills_used": [],
-                "publication_venue": item.get("publication_venue"),
-                "evidence_snippet": evidence_map.get("research_experience"),
-                "confidence_score": research_confidence,
-                "source_document_id": source_document_id,
-                "sort_index": index,
-            }
-            fingerprint = ProfileService._entry_fingerprint(
-                row,
-                keys=[
-                    "experience_type",
-                    "title",
-                    "role",
-                    "start_date",
-                    "description",
-                    "publication_venue",
-                ],
-            )
-            if fingerprint in seen_fingerprints:
-                continue
-            seen_fingerprints.add(fingerprint)
-            row["entry_fingerprint"] = fingerprint
-            rows.append(row)
-
-        return rows
+        return build_experience_entries(source_document_id, profile_data)
 
     @staticmethod
     def _entry_fingerprint(payload: dict[str, Any], keys: list[str]) -> str:
-        """Return stable SHA-256 fingerprint for dedupe-sensitive fields."""
-        normalized = {key: payload.get(key) for key in keys}
-        canonical = json.dumps(normalized, sort_keys=True, ensure_ascii=True, default=str)
-        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return entry_fingerprint(payload, keys)
