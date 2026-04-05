@@ -11,18 +11,14 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
     """CRUD helpers for extracted_skills, education_entries, experience_entries, profile_versions."""
 
     async def replace_extracted_skills(self, profile_id: str, rows: list[dict[str, Any]]) -> None:
-        await self.execute_write("DELETE FROM extracted_skills WHERE profile_id = %s", (profile_id,))
-        if not rows:
-            return
-
         query = """
             INSERT INTO extracted_skills (
                 id, profile_id, raw_skill, normalized_skill,
                 confidence_score, source_document_id
             ) VALUES (%s, %s, %s, %s, %s, %s)
         """
-        for row in rows:
-            params = (
+        params_list = [
+            (
                 generate_uuid(),
                 profile_id,
                 row["raw_skill"],
@@ -30,7 +26,14 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
                 row.get("confidence_score"),
                 row.get("source_document_id"),
             )
-            await self.execute_write(query, params)
+            for row in rows
+        ]
+        await self._replace_rows_transactional(
+            delete_query="DELETE FROM extracted_skills WHERE profile_id = %s",
+            profile_id=profile_id,
+            insert_query=query,
+            insert_params=params_list,
+        )
 
     async def get_skills_by_profile(self, profile_id: str) -> list[dict[str, Any]]:
         """Fetch normalized skills for a profile ordered for stable API responses."""
@@ -43,10 +46,6 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
         return await self.execute_query(query, (profile_id,))
 
     async def replace_education_entries(self, profile_id: str, rows: list[dict[str, Any]]) -> None:
-        await self.execute_write("DELETE FROM education_entries WHERE profile_id = %s", (profile_id,))
-        if not rows:
-            return
-
         query = """
             INSERT INTO education_entries (
                 id, profile_id, institution, degree, field_of_study,
@@ -55,8 +54,8 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
                 entry_fingerprint
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        for row in rows:
-            params = (
+        params_list = [
+            (
                 generate_uuid(),
                 profile_id,
                 row["institution"],
@@ -73,13 +72,16 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
                 row.get("sort_index", 0),
                 row.get("entry_fingerprint"),
             )
-            await self.execute_write(query, params)
+            for row in rows
+        ]
+        await self._replace_rows_transactional(
+            delete_query="DELETE FROM education_entries WHERE profile_id = %s",
+            profile_id=profile_id,
+            insert_query=query,
+            insert_params=params_list,
+        )
 
     async def replace_experience_entries(self, profile_id: str, rows: list[dict[str, Any]]) -> None:
-        await self.execute_write("DELETE FROM experience_entries WHERE profile_id = %s", (profile_id,))
-        if not rows:
-            return
-
         query = """
             INSERT INTO experience_entries (
                 id, profile_id, experience_type, organization, title, role,
@@ -88,8 +90,8 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
                 source_document_id, sort_index, entry_fingerprint
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """
-        for row in rows:
-            params = (
+        params_list = [
+            (
                 generate_uuid(),
                 profile_id,
                 row["experience_type"],
@@ -107,7 +109,14 @@ class ProfileNormalizedRepository(MySQLBaseRepository):
                 row.get("sort_index", 0),
                 row.get("entry_fingerprint"),
             )
-            await self.execute_write(query, params)
+            for row in rows
+        ]
+        await self._replace_rows_transactional(
+            delete_query="DELETE FROM experience_entries WHERE profile_id = %s",
+            profile_id=profile_id,
+            insert_query=query,
+            insert_params=params_list,
+        )
 
     async def create_profile_version_snapshot(
         self,

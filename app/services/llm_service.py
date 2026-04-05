@@ -155,7 +155,7 @@ class LLMService:
         )
 
         try:
-            if settings.OPENAI_API_KEY:
+            if self._has_real_openai_key():
                 result = await call_openai(system_prompt, user_content)
                 await self._log_llm_call(
                     operation="gap_analysis",
@@ -183,7 +183,7 @@ class LLMService:
             logger.warning("openai_gap_analysis_failed", error=str(exc))
 
         try:
-            if settings.ANTHROPIC_API_KEY:
+            if self._has_real_anthropic_key():
                 result = await call_anthropic(system_prompt, user_content)
                 await self._log_llm_call(
                     operation="gap_analysis",

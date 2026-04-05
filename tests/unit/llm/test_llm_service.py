@@ -18,6 +18,23 @@ async def test_extract_profile_no_openai_key(monkeypatch):
         await service.extract_profile("Some document text")
 
 
+@pytest.mark.asyncio
+async def test_run_gap_analysis_placeholder_keys_treated_as_not_configured(monkeypatch):
+    """Placeholder keys should be ignored for gap analysis, same as extraction."""
+    monkeypatch.setattr("app.config.settings.OPENAI_API_KEY", "sk-your-openai-key-here")
+    monkeypatch.setattr("app.config.settings.ANTHROPIC_API_KEY", "sk-ant-your-anthropic-key-here")
+
+    async def should_not_be_called(*_args, **_kwargs):
+        raise AssertionError("LLM provider call should not be attempted with placeholder keys")
+
+    monkeypatch.setattr("app.services.llm_service.call_openai", should_not_be_called)
+    monkeypatch.setattr("app.services.llm_service.call_anthropic", should_not_be_called)
+
+    service = LLMService()
+    with pytest.raises(LLMExtractionError, match="No LLM API key configured for gap analysis"):
+        await service.run_gap_analysis({"education": []}, "Master of Computer Science")
+
+
 def test_anthropic_placeholder_key_not_treated_as_real(monkeypatch):
     """Placeholder Anthropic keys should not trigger fallback attempts."""
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-your-anthropic-key-here")

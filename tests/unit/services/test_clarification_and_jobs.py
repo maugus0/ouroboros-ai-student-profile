@@ -124,6 +124,7 @@ def test_publications_clarification_is_required_for_phd_when_missing():
 
     queue_fields = {item["field"] for item in normalized["clarification_queue"]}
     assert "publications" in queue_fields
+    assert normalized["target_degree_needs_clarification"] is False
 
 
 def test_react_keeps_publications_in_trace_as_accept_after_user_answer():
@@ -154,6 +155,7 @@ def test_react_marks_low_confidence_critical_field_for_clarification():
     assert "target_degree_level" in queue_fields
     assert normalized["react_decision_trace"]["target_degree_level"]["decision"] == "clarify"
     assert normalized["react_decision_trace"]["target_degree_level"]["reason"] == "low_confidence"
+    assert normalized["target_degree_needs_clarification"] is True
 
 
 def test_react_marks_contradicted_field_for_clarification():
@@ -221,8 +223,8 @@ async def test_submit_clarifications_updates_target_degree_metadata_and_gpa_rati
     assert service.profile_repo.updates["target_degree_level"] == "phd"
     assert service.profile_repo.updates["target_degree_source"] == "user_input"
     assert service.profile_repo.updates["target_degree_confidence"] == 1.0
-    # For PhD targets, publications may still require clarification.
-    assert isinstance(service.profile_repo.updates["target_degree_needs_clarification"], bool)
+    # For PhD targets, publications may still require clarification, but target-degree itself should be resolved.
+    assert service.profile_repo.updates["target_degree_needs_clarification"] is False
     assert service.profile_repo.updates["gpa"] == 4.0
     assert service.profile_repo.updates["gpa_scale"] == 5.0
 

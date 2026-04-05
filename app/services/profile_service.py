@@ -9,7 +9,6 @@ from typing import Any, Optional
 
 from app.core.logging import get_logger
 from app.repositories.mysql_document_repo import DocumentRepository
-from app.repositories.mysql_field_repo import FieldRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
 from app.repositories.mysql_profile_repo import ProfileRepository
 from app.services.document_parser import DocumentParser
@@ -27,7 +26,6 @@ class ProfileService:
     def __init__(self):
         self.profile_repo = ProfileRepository()
         self.document_repo = DocumentRepository()
-        self.field_repo = FieldRepository()
         self.normalized_repo = ProfileNormalizedRepository()
         self.parser = DocumentParser()
         self.llm_service = LLMService()
@@ -199,11 +197,47 @@ class ProfileService:
             latest_version = await self.normalized_repo.get_latest_profile_version(profile_id)
             merged_profile_json = dict(latest_version.get("profile_json") or {}) if latest_version else {}
 
+            # Merge incoming updates into the profile_json snapshot payload.
+            snapshot_updates = {key: value for key, value in clean.items() if key != "profile_version"}
+            if "gpa" in snapshot_updates:
+                snapshot_updates["gpa_highest"] = snapshot_updates["gpa"]
+
+            # PATCH/PUT updates are user input; reflect stronger provenance in snapshot metadata.
+            if "target_degree_level" in snapshot_updates:
+                snapshot_updates["target_degree_source"] = "user_input"
+                snapshot_updates["target_degree_confidence"] = 1.0
+
+            merged_profile_json.update(snapshot_updates)
+
+            # Mark user-updated fields as high-confidence in snapshot confidence_map.
+            confidence_map = (
+                merged_profile_json.get("confidence_map")
+                if isinstance(merged_profile_json.get("confidence_map"), dict)
+                else {}
+            )
+            confidence_field_map = {
+                "full_name": "full_name",
+                "email": "email",
+                "phone": "phone",
+                "nationality": "nationality",
+                "target_degree_level": "target_degree_level",
+                "gpa": "gpa_highest",
+                "gpa_scale": "gpa_scale",
+            }
+            for source_field, target_field in confidence_field_map.items():
+                if source_field in snapshot_updates:
+                    confidence_map[target_field] = 1.0
+            if confidence_map:
+                merged_profile_json["confidence_map"] = confidence_map
+
+            # Keep clarification queue/trace consistent with latest snapshot values.
+            snapshot_profile_json = self._apply_react_decision_pattern(merged_profile_json)
+
             try:
                 await self.normalized_repo.create_profile_version_snapshot(
                     profile_id=profile_id,
                     version_number=next_version,
-                    profile_json=merged_profile_json,
+                    profile_json=snapshot_profile_json,
                     change_reason="profile_update",
                 )
             except Exception as exc:  # pylint: disable=broad-exception-caught

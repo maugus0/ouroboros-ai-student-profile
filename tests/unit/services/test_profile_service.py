@@ -239,6 +239,63 @@ async def test_update_profile_increments_profile_version():
 
 
 @pytest.mark.asyncio
+async def test_update_profile_merges_updates_into_snapshot_and_recomputes_clarifications():
+    service = ProfileService()
+
+    class _StubProfileRepo:
+        def __init__(self):
+            self.updated = None
+
+        async def get_profile_by_id(self, _profile_id):
+            return {"id": "p1", "profile_version": 1}
+
+        async def update_profile(self, _profile_id, updates):
+            self.updated = updates
+            return 1
+
+    class _StubNormalizedRepo:
+        def __init__(self):
+            self.snapshot_payload = None
+
+        async def create_profile_version_snapshot(self, profile_id, version_number, profile_json, change_reason):
+            self.snapshot_payload = profile_json
+            return "ver-2"
+
+        async def get_latest_profile_version(self, _profile_id):
+            return {
+                "profile_json": {
+                    "full_name": "Jane Doe",
+                    "target_degree_level": "master",
+                    "confidence_map": {"target_degree_level": 0.5},
+                    "clarification_queue": [],
+                }
+            }
+
+    normalized_repo = _StubNormalizedRepo()
+    service.profile_repo = _StubProfileRepo()
+    service.normalized_repo = normalized_repo
+
+    async def _stub_get_profile(_profile_id):
+        return {"id": "p1", "profile_version": 2}
+
+    service.get_profile = _stub_get_profile  # type: ignore[method-assign]
+
+    await service.update_profile("p1", {"target_degree_level": "phd", "gpa": 3.95})
+
+    assert normalized_repo.snapshot_payload is not None
+    assert normalized_repo.snapshot_payload["target_degree_level"] == "phd"
+    assert normalized_repo.snapshot_payload["gpa"] == 3.95
+    assert normalized_repo.snapshot_payload["gpa_highest"] == 3.95
+    assert normalized_repo.snapshot_payload["target_degree_source"] == "user_input"
+    assert normalized_repo.snapshot_payload["target_degree_confidence"] == 1.0
+    assert normalized_repo.snapshot_payload["confidence_map"]["target_degree_level"] == 1.0
+    assert normalized_repo.snapshot_payload["confidence_map"]["gpa_highest"] == 1.0
+
+    queue_fields = {item["field"] for item in normalized_repo.snapshot_payload["clarification_queue"]}
+    assert "publications" in queue_fields
+
+
+@pytest.mark.asyncio
 async def test_get_profile_removes_duplicated_keys_from_profile_json():
     service = ProfileService()
 

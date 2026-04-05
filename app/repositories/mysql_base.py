@@ -13,6 +13,28 @@ logger = get_logger(__name__)
 class MySQLBaseRepository:
     """Base class for MySQL repositories using raw SQL with aiomysql."""
 
+    async def _replace_rows_transactional(
+        self,
+        *,
+        delete_query: str,
+        profile_id: str,
+        insert_query: str,
+        insert_params: list[tuple[Any, ...]],
+    ) -> None:
+        """Atomically replace profile-scoped rows using batched inserts."""
+        pool = get_pool()
+        async with pool.acquire() as conn:
+            try:
+                await conn.begin()
+                async with conn.cursor() as cursor:
+                    await cursor.execute(delete_query, (profile_id,))
+                    if insert_params:
+                        await cursor.executemany(insert_query, insert_params)
+                await conn.commit()
+            except Exception:
+                await conn.rollback()
+                raise
+
     async def execute_query(self, query: str, params: tuple = ()) -> list[dict[str, Any]]:
         """Execute a SELECT query and return results as list of dicts."""
         pool = get_pool()

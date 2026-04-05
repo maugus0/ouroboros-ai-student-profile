@@ -63,6 +63,17 @@ uv run pytest tests/integration/ -v
 docker-compose stop mysql
 ```
 
+### Running Pytest Directly (Important)
+
+When invoking integration tests directly (without `run-integration-tests.sh`), pass the integration env overrides inline so app startup does not inherit mock-friendly defaults from shared test setup.
+
+```bash
+ALLOW_DB_FAILURE=false USE_MOCK_DATA=false X_SERVICE_TOKEN=test-service-token \
+    ./.venv/bin/python -m pytest -q tests/integration
+```
+
+This ensures FastAPI startup initializes the real DB pool instead of skipping DB with `ALLOW_DB_FAILURE=true`.
+
 ## CI/CD Integration
 
 The GitHub Actions workflow automatically runs integration tests on every PR:

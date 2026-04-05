@@ -591,13 +591,13 @@ Shared lint rules live in `.pylintrc` (line length, a few docstring / design rel
 ### Pipeline Stages
 
 | Stage                | Description                                                          |
-| -------------------- | -------------------------------------------------------------------- | --- | ---------------------------- |
+| -------------------- | -------------------------------------------------------------------- |
 | **Format**           | Black + isort validation                                             |
 | **Lint**             | **flake8** + **pylint** (both blocking)                              |
 | **Unit Tests**       | `pytest tests/unit/` with JUnit XML artifact                         |
 | **Type Check**       | **mypy** — blocking (after format + lint)                            |
 | **Tests + Coverage** | Full `pytest tests/` with HTML + Cobertura XML (after format + lint) |
-| **Security Audit**   | Bandit (JSON artifact; command uses `                                |     | true` to avoid hard-failing) |
+| **Security Audit**   | Bandit (JSON artifact; command uses `true` to avoid hard-failing)    |
 | **Docker Build**     | Verify image builds — no push (after all above)                      |
 | **Summary**          | Markdown table of all job results                                    |
 
