@@ -487,9 +487,9 @@ prompt = get_profile_extraction_prompt(
 
 | File                              | Purpose                          |
 | --------------------------------- | -------------------------------- |
-| `profile_extraction_v1.json`      | Main CV/transcript extraction    |
-| `target_degree_detection_v1.json` | Target degree inference          |
-| `gap_analysis_v1.json`            | Readiness scan against baselines |
+| `profile_extraction_v2.json`      | Main CV/transcript extraction    |
+| `target_degree_detection_v2.json` | Target degree inference          |
+| `gap_analysis_v2.json`            | Readiness scan against baselines |
 
 ### Prompt Utilities
 
@@ -692,9 +692,9 @@ ouroboros-ai-student-profile/
 │   ├── config.py                # Pydantic settings
 │   └── main.py                  # FastAPI app with lifespan
 ├── prompts/                     # Version-controlled LLM prompt templates
-│   ├── profile_extraction_v1.json
-│   ├── target_degree_detection_v1.json
-│   └── gap_analysis_v1.json
+│   ├── profile_extraction_v2.json
+│   ├── target_degree_detection_v2.json
+│   └── gap_analysis_v2.json
 ├── migrations/                  # SQL migration files (001-009)
 ├── scripts/
 │   ├── run_migrations.py

@@ -364,7 +364,7 @@ async def test_llm_call_log_repository_create(cleanup_integration_db):
             "success": True,
             "retry_count": 0,
             "trace_id": "trace-1",
-            "prompt_template_version": "profile_extraction_v1",
+            "prompt_template_version": "profile_extraction_v2",
         }
     )
 

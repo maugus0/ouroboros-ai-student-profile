@@ -19,8 +19,8 @@ from app.utils.exceptions import LLMExtractionError
 
 logger = get_logger(__name__)
 
-PROFILE_EXTRACTION_PROMPT_VERSION = "profile_extraction_v1"
-GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v1"
+PROFILE_EXTRACTION_PROMPT_VERSION = "profile_extraction_v2"
+GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v2"
 
 
 class LLMService:

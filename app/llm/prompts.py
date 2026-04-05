@@ -35,8 +35,8 @@ def get_profile_extraction_prompt(
     """
     _require_prompt_format(fmt)
     if fmt == "text":
-        return build_prompt_text("profile_extraction_v1.json", context)
-    return build_prompt_json("profile_extraction_v1.json", context)
+        return build_prompt_text("profile_extraction_v2.json", context)
+    return build_prompt_json("profile_extraction_v2.json", context)
 
 
 def get_target_degree_detection_prompt(
@@ -46,8 +46,8 @@ def get_target_degree_detection_prompt(
     """Build the target-degree detection system prompt."""
     _require_prompt_format(fmt)
     if fmt == "text":
-        return build_prompt_text("target_degree_detection_v1.json", context)
-    return build_prompt_json("target_degree_detection_v1.json", context)
+        return build_prompt_text("target_degree_detection_v2.json", context)
+    return build_prompt_json("target_degree_detection_v2.json", context)
 
 
 def get_gap_analysis_prompt(
@@ -57,5 +57,5 @@ def get_gap_analysis_prompt(
     """Build the gap-analysis system prompt."""
     _require_prompt_format(fmt)
     if fmt == "text":
-        return build_prompt_text("gap_analysis_v1.json", context)
-    return build_prompt_json("gap_analysis_v1.json", context)
+        return build_prompt_text("gap_analysis_v2.json", context)
+    return build_prompt_json("gap_analysis_v2.json", context)

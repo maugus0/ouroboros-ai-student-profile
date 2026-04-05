@@ -39,16 +39,17 @@
       },
       "analysis_rules": [
         "Compare profile against the baseline for their target degree",
-        "Identify missing or weak areas",
-        "Score each area: strong (>0.7), adequate (0.4-0.7), weak (<0.4), missing (null)",
-        "Provide actionable recommendations for each gap",
+        "For each baseline signal, assign status: meets, partial, or missing",
+        "Use severity to indicate impact of each non-meets signal",
+        "Provide actionable recommendations for each partial or missing signal",
         "Calculate overall readiness score (weighted average)"
       ],
       "output_format": {
         "format": "json",
         "required_fields": [
           "readiness_score: 0.0-1.0",
-          "gaps_identified: [{ area, severity: critical|moderate|minor, detail }]",
+          "readiness_signals: [{ category, requirement, status: meets|partial|missing, severity: low|medium|high, recommendation }]",
+          "signal_summary: { meets, partial, missing }",
           "recommendations: [{ area, action, priority: high|medium|low }]"
         ]
       }

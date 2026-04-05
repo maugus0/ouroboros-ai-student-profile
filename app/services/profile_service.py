@@ -67,7 +67,7 @@ class ProfileService:
         record = {
             **self._flatten_profile_for_db(profile_data),
             "profile_version": 1,
-            "profile_prompt_version": "profile_extraction_v1",
+            "profile_prompt_version": "profile_extraction_v2",
             "llm_model_used": llm_result.model,
             "llm_fallback_used": llm_result.fallback_used,
             "llm_fallback_reason": llm_result.fallback_reason,
