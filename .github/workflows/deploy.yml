@@ -325,8 +325,8 @@ jobs:
 
       - name: Run Bandit
         run: |
-          uv run bandit -r app/ -f json -o bandit-report.json || true
-          uv run bandit -r app/ || true
+          uv run bandit -r app/ -f json -o bandit-report.json
+          uv run bandit -r app/
 
       - name: Upload security reports
         if: always()
@@ -394,7 +394,7 @@ jobs:
                   key = key.strip()
                   value = overrides.get(key)
                   if value is not None and value != "":
-                      line = f"{key}={value}\\n"
+                      line = f"{key}={value}\n"
               out.append(line)
 
           with open(".env", "w", encoding="utf-8") as f:
