@@ -37,16 +37,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dev dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Check formatting (Black)
         run: uv run black --check --diff app/ tests/
@@ -62,16 +54,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dev dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run flake8
         run: uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
@@ -83,30 +67,22 @@ jobs:
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    env:
+      ALLOW_DB_FAILURE: "true"
+      USE_MOCK_DATA: "true"
+      X_SERVICE_TOKEN: "test-service-token"
+      MYSQL_HOST: "localhost"
+      MYSQL_DATABASE: "test_db"
+      MYSQL_USER: "test_user"
+      MYSQL_PASSWORD: "test_pass"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run unit tests
-        env:
-          ALLOW_DB_FAILURE: "true"
-          USE_MOCK_DATA: "true"
-          X_SERVICE_TOKEN: "test-service-token"
-          MYSQL_HOST: "localhost"
-          MYSQL_DATABASE: "test_db"
-          MYSQL_USER: "test_user"
-          MYSQL_PASSWORD: "test_pass"
         run: uv run pytest tests/unit/ -v --tb=short --junitxml=junit-report.xml
 
       - name: Upload test results
@@ -126,16 +102,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run mypy
         run: uv run mypy app/ --ignore-missing-imports --no-strict-optional
@@ -145,30 +113,22 @@ jobs:
     name: Coverage Tests (Mocked DB)
     needs: [format, lint]
     runs-on: ubuntu-latest
+    env:
+      ALLOW_DB_FAILURE: "true"
+      USE_MOCK_DATA: "true"
+      X_SERVICE_TOKEN: "test-service-token"
+      MYSQL_HOST: "localhost"
+      MYSQL_DATABASE: "test_db"
+      MYSQL_USER: "test_user"
+      MYSQL_PASSWORD: "test_pass"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run tests with coverage
-        env:
-          ALLOW_DB_FAILURE: "true"
-          USE_MOCK_DATA: "true"
-          X_SERVICE_TOKEN: "test-service-token"
-          MYSQL_HOST: "localhost"
-          MYSQL_DATABASE: "test_db"
-          MYSQL_USER: "test_user"
-          MYSQL_PASSWORD: "test_pass"
         run: uv run pytest tests/unit/ tests/flow/ --cov=app --cov-report=html --cov-report=xml -v
 
       - name: Upload coverage report
@@ -184,12 +144,16 @@ jobs:
     name: Integration Tests (Real MySQL)
     needs: [format, lint]
     runs-on: ubuntu-latest
+    env:
+      MYSQL_HOST: localhost
+      MYSQL_PORT: 3308
+      MYSQL_USER: root
+      MYSQL_PASSWORD: integration_password
     services:
       mysql:
         image: mysql:8.0
         env:
           MYSQL_ROOT_PASSWORD: integration_password
-          MYSQL_DATABASE: student_profile_db
         options: >-
           --health-cmd="mysqladmin ping -h localhost"
           --health-interval=10s
@@ -202,27 +166,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
         with:
-          python-version: "3.11"
+          extra-packages: mysql-connector-python
 
-      - name: Install dependencies
+      - name: Wait for MySQL and create integration database
         run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
-
-      - name: Wait for MySQL to be healthy
-        env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3308
-          MYSQL_DATABASE: student_profile_db
-          MYSQL_USER: root
-          MYSQL_PASSWORD: integration_password
-        run: |
-          pip install mysql-connector-python
-          python - <<'PY'
+          uv run python - <<'PY'
           import os
           import time
           import mysql.connector
@@ -233,36 +184,17 @@ jobs:
           password = os.environ["MYSQL_PASSWORD"]
 
           deadline = time.time() + 60
+          conn = None
           while True:
-              try:
-                  conn = mysql.connector.connect(host=host, port=port, user=user, password=password)
-                  conn.close()
-                  print("MySQL is ready")
-                  break
-              except Exception:
-                  if time.time() >= deadline:
-                      raise
-                  time.sleep(2)
-          PY
+            try:
+              conn = mysql.connector.connect(host=host, port=port, user=user, password=password)
+              print("MySQL is ready")
+              break
+            except Exception:
+              if time.time() >= deadline:
+                raise
+              time.sleep(2)
 
-      - name: Create integration database
-        env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3308
-          MYSQL_USER: root
-          MYSQL_PASSWORD: integration_password
-        run: |
-          pip install mysql-connector-python
-          python - <<'PY'
-          import os
-          import mysql.connector
-
-          conn = mysql.connector.connect(
-              host=os.environ["MYSQL_HOST"],
-              port=int(os.environ["MYSQL_PORT"]),
-              user=os.environ["MYSQL_USER"],
-              password=os.environ["MYSQL_PASSWORD"],
-          )
           cursor = conn.cursor()
           cursor.execute(
               "CREATE DATABASE IF NOT EXISTS student_profile_integration "
@@ -276,11 +208,7 @@ jobs:
 
       - name: Run database migrations
         env:
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3308
           MYSQL_DATABASE: student_profile_integration
-          MYSQL_USER: root
-          MYSQL_PASSWORD: integration_password
         run: uv run python scripts/run_migrations.py
 
       - name: Run integration tests
@@ -288,11 +216,7 @@ jobs:
           ALLOW_DB_FAILURE: "false"
           USE_MOCK_DATA: "false"
           X_SERVICE_TOKEN: "integration-service-token"
-          MYSQL_HOST: localhost
-          MYSQL_PORT: 3308
           MYSQL_DATABASE: student_profile_integration
-          MYSQL_USER: root
-          MYSQL_PASSWORD: integration_password
         run: uv run pytest tests/integration/ -v --tb=short --junitxml=integration-report.xml
 
       - name: Upload integration test results
@@ -312,16 +236,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install uv
-          uv sync --extra dev
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run Bandit
         run: |
