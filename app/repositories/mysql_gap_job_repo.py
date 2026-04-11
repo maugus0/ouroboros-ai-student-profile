@@ -9,6 +9,14 @@ from app.utils.helpers import generate_uuid
 
 logger = get_logger(__name__)
 
+GAP_JOB_UPDATE_COLUMNS: tuple[str, ...] = (
+    "status",
+    "result_json",
+    "error_message",
+    "started_at",
+    "completed_at",
+)
+
 
 class GapAnalysisJobRepository(MySQLBaseRepository):
     """CRUD operations on the ``gap_analysis_jobs`` table."""
@@ -46,18 +54,26 @@ class GapAnalysisJobRepository(MySQLBaseRepository):
         return row
 
     async def update_job(self, job_id: str, updates: dict[str, Any]) -> int:
-        if not updates:
+        allowed_updates = {key: value for key, value in updates.items() if key in GAP_JOB_UPDATE_COLUMNS}
+        if not allowed_updates:
             return 0
 
-        set_clauses = []
-        params = []
-        for key, value in updates.items():
-            set_clauses.append(f"{key} = %s")
-            if key == "result_json" and value is not None:
-                params.append(json.dumps(value))
-            else:
-                params.append(value)
+        query = """
+            UPDATE gap_analysis_jobs SET
+                status = CASE WHEN %s THEN %s ELSE status END,
+                result_json = CASE WHEN %s THEN %s ELSE result_json END,
+                error_message = CASE WHEN %s THEN %s ELSE error_message END,
+                started_at = CASE WHEN %s THEN %s ELSE started_at END,
+                completed_at = CASE WHEN %s THEN %s ELSE completed_at END
+            WHERE id = %s
+        """
+        params: list[Any] = []
+        for column in GAP_JOB_UPDATE_COLUMNS:
+            value_present = column in allowed_updates
+            value = allowed_updates.get(column)
+            if column == "result_json" and value_present and value is not None:
+                value = json.dumps(value)
+            params.extend([value_present, value])
 
         params.append(job_id)
-        query = f"UPDATE gap_analysis_jobs SET {', '.join(set_clauses)} WHERE id = %s"
         return await self.execute_write(query, tuple(params))

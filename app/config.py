@@ -1,6 +1,7 @@
 """Application configuration loaded from environment variables."""
 
 import os
+import tempfile
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -40,13 +41,15 @@ class Settings(BaseSettings):
     # ========== Document Processing ==========
     MAX_FILE_SIZE_MB: int = 10
     ALLOWED_EXTENSIONS: str = ".pdf,.docx"
-    TEMP_UPLOAD_DIR: str = "/tmp/uploads"
+    TEMP_UPLOAD_DIR: str = os.path.join(tempfile.gettempdir(), "ouroboros-ai-student-profile", "uploads")
 
     TESSERACT_PATH: str = ""
     OCR_LANGUAGE: str = "eng"
 
     # ========== Application ==========
     LOG_LEVEL: str = "INFO"
+    UVICORN_HOST: str = "127.0.0.1"
+    UVICORN_PORT: int = 8001
     USE_MOCK_DATA: bool = True
     ALLOW_DB_FAILURE: bool = False
 

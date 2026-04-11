@@ -115,4 +115,4 @@ app.openapi = custom_openapi  # type: ignore[method-assign]
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)
+    uvicorn.run(app, host=settings.UVICORN_HOST, port=settings.UVICORN_PORT, reload=True)
