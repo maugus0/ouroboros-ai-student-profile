@@ -105,6 +105,24 @@ def custom_openapi():
         routes=app.routes,
     )
     schema["info"]["x-logo"] = {"url": "https://ouroboros.ai/logo.png"}
+    schema.setdefault("components", {})
+    schema["components"].setdefault("securitySchemes", {})
+    schema["components"]["securitySchemes"]["InternalBearer"] = {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Internal bearer token issued by the orchestrator",
+    }
+
+    public_paths = {"/", "/health"}
+    for path, path_item in schema.get("paths", {}).items():
+        if path in public_paths:
+            continue
+        for method in ("get", "post", "put", "patch", "delete"):
+            operation = path_item.get(method)
+            if isinstance(operation, dict):
+                operation.setdefault("security", [{"InternalBearer": []}])
+
     app.openapi_schema = schema
     return schema
 

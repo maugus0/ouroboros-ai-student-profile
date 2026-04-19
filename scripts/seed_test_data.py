@@ -12,7 +12,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from app.config import settings
+from app.config import settings  # noqa: E402
 
 load_dotenv(ROOT_DIR / ".env")
 

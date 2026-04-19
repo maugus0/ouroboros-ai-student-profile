@@ -57,11 +57,10 @@ def test_patch_profile_merges_updates_into_snapshot_and_recomputes_queue(client,
     assert captured["snapshot"]["change_reason"] == "profile_update"
     assert profile_json["target_degree_level"] == "phd"
     assert profile_json["gpa"] == 3.95
-    assert profile_json["gpa_highest"] == 3.95
     assert profile_json["target_degree_source"] == "user_input"
     assert profile_json["target_degree_confidence"] == 1.0
     assert profile_json["confidence_map"]["target_degree_level"] == 1.0
-    assert profile_json["confidence_map"]["gpa_highest"] == 1.0
+    assert profile_json["confidence_map"]["gpa"] == 1.0
 
     queue_fields = {item["field"] for item in profile_json["clarification_queue"]}
     assert "publications" in queue_fields

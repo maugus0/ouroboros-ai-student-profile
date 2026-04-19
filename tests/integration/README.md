@@ -68,7 +68,11 @@ docker-compose stop mysql
 When invoking integration tests directly (without `run-integration-tests.sh`), pass the integration env overrides inline so app startup does not inherit mock-friendly defaults from shared test setup.
 
 ```bash
-ALLOW_DB_FAILURE=false USE_MOCK_DATA=false X_SERVICE_TOKEN=test-service-token \
+ALLOW_DB_FAILURE=false USE_MOCK_DATA=false INTERNAL_TOKEN_VERIFY_ENABLED=true \
+INTERNAL_TOKEN_SIGNING_ALGORITHM=HS256 \
+INTERNAL_TOKEN_PUBLIC_KEY=internal-test-signing-key-with-32-bytes \
+INTERNAL_TOKEN_ISSUER=ouroboros-orchestrator-internal \
+INTERNAL_TOKEN_AUDIENCE=ouroboros.student-profile \
     ./.venv/bin/python -m pytest -q tests/integration
 ```
 
@@ -113,7 +117,7 @@ tests/integration/
 **`conftest.py`** provides:
 
 - `integration_client` — FastAPI TestClient with app
-- `service_token_header` — Service authentication header
+- `service_token_header` — Internal bearer-token authentication header
 - `setup_integration_db` — Auto-runs migrations (session-scoped)
 - `cleanup_integration_db` — Truncates tables after each test
 
@@ -162,7 +166,11 @@ Tables are truncated in reverse dependency order:
 ```bash
 ALLOW_DB_FAILURE=false
 USE_MOCK_DATA=false
-X_SERVICE_TOKEN=integration-service-token
+INTERNAL_TOKEN_VERIFY_ENABLED=true
+INTERNAL_TOKEN_SIGNING_ALGORITHM=HS256
+INTERNAL_TOKEN_PUBLIC_KEY=internal-test-signing-key-with-32-bytes
+INTERNAL_TOKEN_ISSUER=ouroboros-orchestrator-internal
+INTERNAL_TOKEN_AUDIENCE=ouroboros.student-profile
 MYSQL_HOST=localhost
 MYSQL_PORT=3308
 MYSQL_DATABASE=student_profile_integration

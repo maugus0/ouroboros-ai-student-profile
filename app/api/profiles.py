@@ -5,9 +5,15 @@ import base64
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 
 from app.config import settings
-from app.middleware.service_auth import require_service_token
+from app.middleware.service_auth import get_optional_request_user_id, get_request_user_id, require_service_token
 from app.models.common_models import StandardResponse
-from app.models.profile_models import ClarificationSubmitRequest, ParseRequest, ProfileUpdate
+from app.models.profile_models import (
+    ClarificationSubmitRequest,
+    CollectFromChatRequest,
+    ParseRequest,
+    ProfileUpdate,
+    SyncUserProfileRequest,
+)
 from app.services.gap_analysis_service import GapAnalysisService
 from app.services.profile_service import ProfileService
 
@@ -27,11 +33,21 @@ def get_gap_service() -> GapAnalysisService:
 
 
 @router.post("/parse")
-async def parse_document(body: ParseRequest, profile_service: ProfileService = Depends(get_profile_service)):
+async def parse_document(
+    body: ParseRequest,
+    request_user_id: str | None = Depends(get_optional_request_user_id),
+    profile_service: ProfileService = Depends(get_profile_service),
+):
     """Accept a document from the orchestrator, parse it, and create a profile."""
+    resolved_user_id = body.user_id or request_user_id
+    if not resolved_user_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="user_id is required")
+
     result = await profile_service.parse_and_create_profile(
+        user_id=resolved_user_id,
         file_name=body.file_name,
         file_content_base64=body.file_content_base64,
+        intent=body.intent,
         document_type=body.document_type,
         target_degree_hint=body.target_degree_hint,
         run_gap_analysis=body.run_gap_analysis,
@@ -39,13 +55,56 @@ async def parse_document(body: ParseRequest, profile_service: ProfileService = D
     return StandardResponse(message="Profile created", data=result)
 
 
+@router.post("/sync-user")
+async def sync_user_profile(
+    body: SyncUserProfileRequest,
+    request_user_id: str | None = Depends(get_optional_request_user_id),
+    profile_service: ProfileService = Depends(get_profile_service),
+):
+    """Seed or update student profile with basic user data from orchestrator."""
+    resolved_user_id = body.user_id or request_user_id
+    if not resolved_user_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="user_id is required")
+
+    payload = body.model_dump(exclude_none=True)
+    payload.pop("user_id", None)
+    result = await profile_service.sync_user_profile(resolved_user_id, payload)
+    return StandardResponse(message="Profile sync completed", data=result)
+
+
+@router.post("/collect-from-chat")
+async def collect_from_chat(
+    body: CollectFromChatRequest,
+    request_user_id: str | None = Depends(get_optional_request_user_id),
+    profile_service: ProfileService = Depends(get_profile_service),
+):
+    """Persist profile fields extracted from chat and return updated readiness."""
+    resolved_user_id = body.user_id or request_user_id
+    if not resolved_user_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="user_id is required")
+
+    result = await profile_service.collect_from_chat(
+        user_id=resolved_user_id,
+        fields=body.fields,
+        extractions=body.extractions,
+        extraction_telemetry=body.extraction_telemetry,
+        pending_clarification_fields=body.pending_clarification_fields,
+        correction_fields=body.correction_fields,
+        chat_id=body.chat_id,
+        message_id=body.message_id,
+    )
+    return StandardResponse(message="Profile fields collected from chat", data=result)
+
+
 @router.post("/parse-upload")
 async def parse_document_upload(
     user_id: str | None = Form(default=None),
+    intent: str = Form(default="profile_completion"),
     document_type: str = Form(default="cv"),
     target_degree_hint: str | None = Form(default=None),
     run_gap_analysis: bool = Form(default=False),
     file: UploadFile = File(...),
+    request_user_id: str | None = Depends(get_optional_request_user_id),
     profile_service: ProfileService = Depends(get_profile_service),
 ):
     """Accept streamed multipart upload and create a profile.
@@ -63,14 +122,31 @@ async def parse_document_upload(
     raw_bytes = await _read_upload_bytes(file)
     file_content_base64 = base64.b64encode(raw_bytes).decode("utf-8")
 
+    resolved_user_id = user_id or request_user_id
+    if not resolved_user_id:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="user_id is required")
+
     result = await profile_service.parse_and_create_profile(
+        user_id=resolved_user_id,
         file_name=file.filename or "uploaded_file",
         file_content_base64=file_content_base64,
+        intent=intent,
         document_type=document_type,
         target_degree_hint=target_degree_hint,
         run_gap_analysis=run_gap_analysis,
     )
     return StandardResponse(message="Profile created", data=result)
+
+
+@router.get("/status")
+async def get_profile_status(
+    user_id: str = Depends(get_request_user_id),
+    intent: str | None = Query(default=None),
+    profile_service: ProfileService = Depends(get_profile_service),
+):
+    """Return readiness details for the request user."""
+    result = await profile_service.get_profile_status(user_id, intent=intent)
+    return StandardResponse(data=result)
 
 
 @router.get("/{profile_id}")

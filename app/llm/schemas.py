@@ -102,3 +102,13 @@ class ExtractedProfile(BaseModel):
     evidence_map: dict[str, str] = Field(default_factory=dict)
     clarification_queue: list[dict[str, str]] = Field(default_factory=list)
     contradiction_flags: list[dict[str, str]] = Field(default_factory=list)
+
+
+class TargetDegreeDetectionResult(BaseModel):
+    """Structured output from the lightweight target-degree classifier."""
+
+    target_degree_level: Optional[DegreeLevelEnum] = Field(default=DegreeLevelEnum.UNKNOWN)
+    confidence: Optional[float] = Field(ge=0.0, le=1.0, default=0.0)
+    source: Optional[str] = Field(default="unknown")
+    needs_clarification: bool = False
+    reasoning: Optional[str] = None

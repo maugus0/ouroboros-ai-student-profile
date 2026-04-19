@@ -15,8 +15,8 @@ def normalize_field_name(field: Any) -> str:
         "birth_date": "date_of_birth",
         "target_degree": "target_degree_level",
         "current_degree": "current_degree_level",
-        "gpa": "gpa_highest",
-        "highest_gpa": "gpa_highest",
+        "gpa_highest": "gpa",
+        "highest_gpa": "gpa",
     }
     return aliases.get(text, text)
 
@@ -98,7 +98,7 @@ def coerce_top_level_value(field: str, value: Any) -> Any:
             return parse_date_text(value)
         return None
 
-    if field in {"gpa_highest", "gpa_scale"}:
+    if field in {"gpa", "gpa_highest", "gpa_scale"}:
         try:
             return float(value)
         except (TypeError, ValueError):

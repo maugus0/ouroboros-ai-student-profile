@@ -3,6 +3,7 @@
 
 def test_parse_upload_success(client, monkeypatch, service_token_header):
     async def fake_parse_and_create_profile(**kwargs):
+        assert kwargs["intent"] == "profile_completion"
         return {
             "profile_id": "test-profile-id",
             "profile_data": {
@@ -23,6 +24,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
 
     files = {"file": ("cv.pdf", b"dummy pdf bytes", "application/pdf")}
     data = {
+        "intent": "profile_completion",
         "document_type": "cv",
         "target_degree_hint": "master",
         "run_gap_analysis": "false",
@@ -30,7 +32,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
 
     response = client.post(
         "/api/v1/profiles/parse-upload",
-        headers=service_token_header,
+        headers={**service_token_header, "X-User-ID": "user-1"},
         data=data,
         files=files,
     )
@@ -47,6 +49,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
 
 def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_token_header):
     async def fake_parse_and_create_profile(**kwargs):
+        assert kwargs["intent"] == "profile_completion"
         return {
             "profile_id": "test-profile-id-2",
             "profile_data": {},
@@ -65,12 +68,13 @@ def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_toke
     files = {"file": ("cv.pdf", b"dummy pdf bytes", "application/pdf")}
     data = {
         "user_id": "legacy-user-id",
+        "intent": "profile_completion",
         "document_type": "cv",
     }
 
     response = client.post(
         "/api/v1/profiles/parse-upload",
-        headers=service_token_header,
+        headers={**service_token_header, "X-User-ID": "legacy-user-id"},
         data=data,
         files=files,
     )
