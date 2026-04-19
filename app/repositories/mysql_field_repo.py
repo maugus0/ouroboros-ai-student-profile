@@ -9,6 +9,15 @@ from app.utils.helpers import generate_uuid
 
 logger = get_logger(__name__)
 
+FIELD_UPDATE_COLUMNS: tuple[str, ...] = (
+    "field_category",
+    "field_name",
+    "field_value",
+    "confidence_score",
+    "evidence_snippet",
+    "source_document_id",
+)
+
 
 class FieldRepository(MySQLBaseRepository):
     """CRUD operations on the ``profile_fields`` table for granular field updates."""
@@ -46,17 +55,29 @@ class FieldRepository(MySQLBaseRepository):
 
     async def update_field(self, field_id: str, updates: dict[str, Any]) -> int:
         """Update a single profile field."""
-        if not updates:
+        allowed_updates = {key: value for key, value in updates.items() if key in FIELD_UPDATE_COLUMNS}
+        if not allowed_updates:
             return 0
 
-        set_clauses = []
-        params = []
-        for key, value in updates.items():
-            set_clauses.append(f"{key} = %s")
-            params.append(json.dumps(value) if key == "field_value" else value)
+        query = """
+            UPDATE profile_fields SET
+                field_category = CASE WHEN %s THEN %s ELSE field_category END,
+                field_name = CASE WHEN %s THEN %s ELSE field_name END,
+                field_value = CASE WHEN %s THEN %s ELSE field_value END,
+                confidence_score = CASE WHEN %s THEN %s ELSE confidence_score END,
+                evidence_snippet = CASE WHEN %s THEN %s ELSE evidence_snippet END,
+                source_document_id = CASE WHEN %s THEN %s ELSE source_document_id END
+            WHERE id = %s
+        """
+        params: list[Any] = []
+        for column in FIELD_UPDATE_COLUMNS:
+            value_present = column in allowed_updates
+            value = allowed_updates.get(column)
+            if column == "field_value" and value_present and value is not None:
+                value = json.dumps(value)
+            params.extend([value_present, value])
 
         params.append(field_id)
-        query = f"UPDATE profile_fields SET {', '.join(set_clauses)} WHERE id = %s"
         return await self.execute_write(query, tuple(params))
 
     async def delete_fields_by_profile(self, profile_id: str) -> int:

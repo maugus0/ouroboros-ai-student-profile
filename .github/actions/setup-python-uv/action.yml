@@ -1,0 +1,30 @@
+name: Setup Python and uv dependencies
+description: Set up Python, install uv, sync dev dependencies, and optionally install extra packages.
+inputs:
+  python-version:
+    description: Python version to install
+    required: false
+    default: "3.11"
+  extra-packages:
+    description: Space-separated packages to install via uv pip
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install uv and sync dependencies
+      shell: bash
+      run: |
+        pip install --upgrade pip
+        pip install uv
+        uv sync --extra dev
+
+    - name: Install extra packages
+      if: ${{ inputs.extra-packages != '' }}
+      shell: bash
+      run: uv pip install ${{ inputs.extra-packages }}

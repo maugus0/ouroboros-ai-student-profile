@@ -1,4 +1,4 @@
-"""Document text extraction from PDF, DOCX, and image files."""
+"""Document text extraction from PDF and DOCX files."""
 
 import base64
 import binascii
@@ -11,7 +11,7 @@ from typing import Optional
 from app.config import settings
 from app.core.logging import get_logger
 from app.utils.exceptions import DocumentParsingError
-from app.utils.file_utils import get_file_extension
+from app.utils.file_utils import get_file_extension, validate_file_extension
 
 logger = get_logger(__name__)
 
@@ -34,6 +34,8 @@ class DocumentParser:
 
         file_hash = hashlib.sha256(raw_bytes).hexdigest()
         ext = get_file_extension(file_name)
+        if not validate_file_extension(file_name):
+            raise DocumentParsingError(f"Unsupported file extension: {ext}")
 
         tmp_path: Optional[str] = None
         try:
@@ -41,10 +43,8 @@ class DocumentParser:
 
             if ext == ".pdf":
                 text, method, ocr_used = self._extract_pdf(tmp_path)
-            elif ext in (".docx", ".doc"):
+            elif ext == ".docx":
                 text, method, ocr_used = self._extract_docx(tmp_path)
-            elif ext in (".jpg", ".jpeg", ".png"):
-                text, method, ocr_used = self._extract_image(tmp_path)
             else:
                 raise DocumentParsingError(f"Unsupported file extension: {ext}")
         finally:
@@ -99,11 +99,6 @@ class DocumentParser:
         doc = Document(path)
         paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
         return "\n".join(paragraphs), "docx", False
-
-    @staticmethod
-    def _extract_image(path: str) -> tuple[str, str, bool]:
-        text, ocr_used = DocumentParser._ocr_fallback(path)
-        return text, "ocr", ocr_used
 
     @staticmethod
     def _ocr_fallback(path: str) -> tuple[str, bool]:

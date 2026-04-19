@@ -1,5 +1,5 @@
--- Migration 002: Documents table
--- Stores metadata for uploaded CV/transcript files
+-- Migration 002: Documents (CV/Transcript metadata)
+-- Depends on: student_profiles
 
 CREATE TABLE IF NOT EXISTS documents (
     id VARCHAR(36) PRIMARY KEY COMMENT 'UUID v4',
@@ -28,4 +28,4 @@ CREATE TABLE IF NOT EXISTS documents (
     INDEX idx_profile_id (profile_id),
     INDEX idx_document_type (document_type),
     INDEX idx_file_hash (file_hash)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

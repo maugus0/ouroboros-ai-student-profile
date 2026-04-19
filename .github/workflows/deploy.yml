@@ -5,6 +5,7 @@
 #   actions/setup-python@v6 — https://github.com/actions/setup-python/releases
 #   actions/upload-artifact@v6 — https://github.com/actions/upload-artifact/releases
 #   docker/setup-buildx-action@v4 — https://github.com/docker/setup-buildx-action/releases
+#   docker/login-action@v4 — https://github.com/docker/login-action/releases
 #   docker/build-push-action@v7 — https://github.com/docker/build-push-action/releases
 #
 # Older action bundles shipped with Node 20; newer majors run on Node 24.
@@ -17,6 +18,9 @@ on:
     branches:
       - main
       - develop
+  push:
+    branches:
+      - main
 
 permissions:
   contents: read
@@ -33,21 +37,14 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dev dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Check formatting (Black)
-        run: black --check --diff app/ tests/
+        run: uv run black --check --diff app/ tests/
 
       - name: Check import sorting (isort)
-        run: isort --check-only --diff app/ tests/
+        run: uv run isort --check-only --diff app/ tests/
 
   # -- Linting ---------------------------------------------------------
   lint:
@@ -57,50 +54,36 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dev dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run flake8
-        run: flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
+        run: uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
 
       - name: Run pylint
-        run: pylint app/ tests/
+        run: uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613
 
   # -- Unit Tests ------------------------------------------------------
   unit-tests:
     name: Unit Tests
     runs-on: ubuntu-latest
+    env:
+      ALLOW_DB_FAILURE: "true"
+      USE_MOCK_DATA: "true"
+      X_SERVICE_TOKEN: "test-service-token"
+      MYSQL_HOST: "localhost"
+      MYSQL_DATABASE: "test_db"
+      MYSQL_USER: "test_user"
+      MYSQL_PASSWORD: "test_pass"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run unit tests
-        env:
-          ALLOW_DB_FAILURE: "true"
-          USE_MOCK_DATA: "true"
-          X_SERVICE_TOKEN: "test-service-token"
-          MYSQL_HOST: "localhost"
-          MYSQL_DATABASE: "test_db"
-          MYSQL_USER: "test_user"
-          MYSQL_PASSWORD: "test_pass"
-        run: pytest tests/unit/ -v --tb=short --junitxml=junit-report.xml
+        run: uv run pytest tests/unit/ -v --tb=short --junitxml=junit-report.xml
 
       - name: Upload test results
         if: always()
@@ -119,48 +102,34 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run mypy
-        run: mypy app/ --ignore-missing-imports --no-strict-optional
+        run: uv run mypy app/ --ignore-missing-imports --no-strict-optional
 
-  # -- Full test suite + Coverage --------------------------------------
-  integration-tests:
-    name: Tests with Coverage
+  # -- Full test suite + Coverage (with mocks) -------------------------
+  coverage-tests:
+    name: Coverage Tests (Mocked DB)
     needs: [format, lint]
     runs-on: ubuntu-latest
+    env:
+      ALLOW_DB_FAILURE: "true"
+      USE_MOCK_DATA: "true"
+      X_SERVICE_TOKEN: "test-service-token"
+      MYSQL_HOST: "localhost"
+      MYSQL_DATABASE: "test_db"
+      MYSQL_USER: "test_user"
+      MYSQL_PASSWORD: "test_pass"
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run tests with coverage
-        env:
-          ALLOW_DB_FAILURE: "true"
-          USE_MOCK_DATA: "true"
-          X_SERVICE_TOKEN: "test-service-token"
-          MYSQL_HOST: "localhost"
-          MYSQL_DATABASE: "test_db"
-          MYSQL_USER: "test_user"
-          MYSQL_PASSWORD: "test_pass"
-        run: pytest tests/ --cov=app --cov-report=html --cov-report=xml -v
+        run: uv run pytest tests/unit/ tests/flow/ --cov=app --cov-report=html --cov-report=xml -v
 
       - name: Upload coverage report
         if: always()
@@ -168,6 +137,94 @@ jobs:
         with:
           name: coverage-report
           path: htmlcov/
+          retention-days: 7
+
+  # -- Integration Tests with Real MySQL --------------------------------
+  integration-tests:
+    name: Integration Tests (Real MySQL)
+    needs: [format, lint]
+    runs-on: ubuntu-latest
+    env:
+      MYSQL_HOST: localhost
+      MYSQL_PORT: 3308
+      MYSQL_USER: root
+      MYSQL_PASSWORD: integration_password
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: integration_password
+        options: >-
+          --health-cmd="mysqladmin ping -h localhost"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+        ports:
+          - 3308:3306
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
+        with:
+          extra-packages: mysql-connector-python
+
+      - name: Wait for MySQL and create integration database
+        run: |
+          uv run python - <<'PY'
+          import os
+          import time
+          import mysql.connector
+
+          host = os.environ["MYSQL_HOST"]
+          port = int(os.environ["MYSQL_PORT"])
+          user = os.environ["MYSQL_USER"]
+          password = os.environ["MYSQL_PASSWORD"]
+
+          deadline = time.time() + 60
+          conn = None
+          while True:
+            try:
+              conn = mysql.connector.connect(host=host, port=port, user=user, password=password)
+              print("MySQL is ready")
+              break
+            except Exception:
+              if time.time() >= deadline:
+                raise
+              time.sleep(2)
+
+          cursor = conn.cursor()
+          cursor.execute(
+              "CREATE DATABASE IF NOT EXISTS student_profile_integration "
+              "CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+          )
+          conn.commit()
+          cursor.close()
+          conn.close()
+          print("integration database ready")
+          PY
+
+      - name: Run database migrations
+        env:
+          MYSQL_DATABASE: student_profile_integration
+        run: uv run python scripts/run_migrations.py
+
+      - name: Run integration tests
+        env:
+          ALLOW_DB_FAILURE: "false"
+          USE_MOCK_DATA: "false"
+          X_SERVICE_TOKEN: "integration-service-token"
+          MYSQL_DATABASE: student_profile_integration
+        run: uv run pytest tests/integration/ -v --tb=short --junitxml=integration-report.xml
+
+      - name: Upload integration test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: integration-test-results
+          path: integration-report.xml
           retention-days: 7
 
   # -- Security Scan ---------------------------------------------------
@@ -179,20 +236,13 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
 
       - name: Run Bandit
         run: |
-          bandit -r app/ -f json -o bandit-report.json || true
-          bandit -r app/ || true
+          uv run bandit -r app/ -f json -o bandit-report.json
+          uv run bandit -r app/
 
       - name: Upload security reports
         if: always()
@@ -205,8 +255,18 @@ jobs:
   # -- Docker Build ----------------------------------------------------
   build-docker:
     name: Build Docker Image
-    needs: [unit-tests, type-check, integration-tests, security-audit]
+    needs:
+      [
+        unit-tests,
+        type-check,
+        coverage-tests,
+        integration-tests,
+        security-audit,
+      ]
     runs-on: ubuntu-latest
+    env:
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -214,7 +274,72 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build Docker image
+      - name: Create CI .env file from template
+        env:
+          DB_HOST: ${{ vars.DB_HOST || 'localhost' }}
+          DB_PORT: ${{ vars.DB_PORT || '3306' }}
+          DB_NAME: ${{ vars.DB_NAME || 'student_profile_db' }}
+          DB_USERNAME: ${{ vars.DB_USERNAME || 'root' }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD || 'ci-password' }}
+          X_SERVICE_TOKEN: ${{ secrets.X_SERVICE_TOKEN || 'ci-service-token' }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || '' }}
+        run: |
+          cp .env.example .env
+          python - <<'PY'
+          import os
+
+          overrides = {
+              "DB_HOST": os.getenv("DB_HOST", ""),
+              "DB_PORT": os.getenv("DB_PORT", ""),
+              "DB_NAME": os.getenv("DB_NAME", ""),
+              "DB_USERNAME": os.getenv("DB_USERNAME", ""),
+              "DB_PASSWORD": os.getenv("DB_PASSWORD", ""),
+              "X_SERVICE_TOKEN": os.getenv("X_SERVICE_TOKEN", ""),
+              "OPENAI_API_KEY": os.getenv("OPENAI_API_KEY", ""),
+              "ANTHROPIC_API_KEY": os.getenv("ANTHROPIC_API_KEY", ""),
+          }
+
+          with open(".env", encoding="utf-8") as f:
+              lines = f.readlines()
+
+          out = []
+          for line in lines:
+              if "=" in line and not line.lstrip().startswith("#"):
+                  key, _ = line.split("=", 1)
+                  key = key.strip()
+                  value = overrides.get(key)
+                  if value is not None and value != "":
+                      line = f"{key}={value}\n"
+              out.append(line)
+
+          with open(".env", "w", encoding="utf-8") as f:
+              f.writelines(out)
+          PY
+
+      - name: Log in to Docker Hub
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        if: ${{ env.DOCKERHUB_USERNAME != '' && env.DOCKERHUB_TOKEN != '' && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/student-profile-agent:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/student-profile-agent:sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          secret-files: |
+            app_env=.env
+
+      - name: Build Docker image (no push)
+        if: ${{ github.event_name == 'pull_request' || env.DOCKERHUB_USERNAME == '' || env.DOCKERHUB_TOKEN == '' || (github.event_name == 'push' && github.ref != 'refs/heads/main') }}
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -222,11 +347,23 @@ jobs:
           tags: student-profile-agent:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          secret-files: |
+            app_env=.env
 
   # -- Summary ---------------------------------------------------------
   summary:
     name: CI/CD Summary
-    needs: [unit-tests, format, lint, type-check, integration-tests, security-audit, build-docker]
+    needs:
+      [
+        unit-tests,
+        format,
+        lint,
+        type-check,
+        coverage-tests,
+        integration-tests,
+        security-audit,
+        build-docker,
+      ]
     runs-on: ubuntu-latest
     if: always()
     steps:
@@ -240,6 +377,7 @@ jobs:
           echo "| Lint | ${{ needs.lint.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Unit Tests | ${{ needs.unit-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Type Check (mypy) | ${{ needs.type-check.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tests + Coverage | ${{ needs.integration-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Coverage Tests (Mocked) | ${{ needs.coverage-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Integration Tests (MySQL) | ${{ needs.integration-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Security Audit | ${{ needs.security-audit.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Docker Build | ${{ needs.build-docker.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY

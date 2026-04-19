@@ -67,3 +67,21 @@ class FakeDocumentRepository:
             del self._store[document_id]
             return 1
         return 0
+
+
+class FakeFieldRepository:
+    """In-memory store that mimics FieldRepository."""
+
+    def __init__(self):
+        self._store: dict[str, dict[str, Any]] = {}
+
+    async def create_field(self, field_data: dict[str, Any]) -> str:
+        field_id = generate_uuid()
+        self._store[field_id] = {"id": field_id, **field_data}
+        return field_id
+
+    async def get_fields_by_profile(self, profile_id: str, category: str | None = None) -> list[dict[str, Any]]:
+        values = [f for f in self._store.values() if f.get("profile_id") == profile_id]
+        if category:
+            values = [f for f in values if f.get("field_category") == category]
+        return values

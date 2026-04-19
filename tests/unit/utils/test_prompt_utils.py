@@ -14,7 +14,7 @@ from app.utils.prompt_utils import (
 
 def test_load_prompt_template():
     """Verify we can load a JSON prompt template."""
-    template = load_prompt_template("profile_extraction_v1.json")
+    template = load_prompt_template("profile_extraction_v2.json")
     assert "prompt_template" in template
     assert "base" in template["prompt_template"]
 
@@ -25,7 +25,7 @@ def test_load_nonexistent_template_raises():
 
 
 def test_merge_runtime_context():
-    template = load_prompt_template("profile_extraction_v1.json")
+    template = load_prompt_template("profile_extraction_v2.json")
     context = {
         "document_metadata": {"text_length": 5000},
         "user_provided_target_degree": "master",
@@ -39,7 +39,7 @@ def test_merge_runtime_context():
 
 
 def test_merge_strips_internal_keys():
-    template = load_prompt_template("profile_extraction_v1.json")
+    template = load_prompt_template("profile_extraction_v2.json")
     context = {
         "agent_capabilities": ["should_be_removed"],
         "internal_flags": {"debug": True},
@@ -55,7 +55,7 @@ def test_merge_strips_internal_keys():
 
 
 def test_merge_without_context_has_no_runtime_key():
-    template = load_prompt_template("profile_extraction_v1.json")
+    template = load_prompt_template("profile_extraction_v2.json")
     prompt = merge_runtime_context(template)
 
     assert "runtime_context" not in prompt
@@ -64,7 +64,7 @@ def test_merge_without_context_has_no_runtime_key():
 
 def test_merge_empty_dict_still_adds_runtime_context():
     """Explicit {} must still produce runtime_context (truthy check would skip it)."""
-    template = load_prompt_template("profile_extraction_v1.json")
+    template = load_prompt_template("profile_extraction_v2.json")
     prompt = merge_runtime_context(template, {})
 
     assert "runtime_context" in prompt
@@ -73,7 +73,7 @@ def test_merge_empty_dict_still_adds_runtime_context():
 
 def test_build_prompt_json_returns_valid_json():
     context = {"test_key": "test_value"}
-    result = build_prompt_json("profile_extraction_v1.json", context)
+    result = build_prompt_json("profile_extraction_v2.json", context)
 
     parsed = json.loads(result)
     assert "runtime_context" in parsed
@@ -81,7 +81,7 @@ def test_build_prompt_json_returns_valid_json():
 
 
 def test_build_prompt_text_contains_sections():
-    result = build_prompt_text("profile_extraction_v1.json")
+    result = build_prompt_text("profile_extraction_v2.json")
 
     assert "AGENT IDENTITY" in result
     assert "EXTRACTION RULES" in result
@@ -92,9 +92,9 @@ def test_build_prompt_text_contains_sections():
 def test_all_templates_load():
     """All three prompt templates should load without error."""
     for filename in (
-        "profile_extraction_v1.json",
-        "target_degree_detection_v1.json",
-        "gap_analysis_v1.json",
+        "profile_extraction_v2.json",
+        "target_degree_detection_v2.json",
+        "gap_analysis_v2.json",
     ):
         template = load_prompt_template(filename)
         assert "prompt_template" in template
