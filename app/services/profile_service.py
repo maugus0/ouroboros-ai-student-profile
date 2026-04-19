@@ -518,7 +518,10 @@ class ProfileService:
                 "clarification_queue": [],
             }
 
-        if extractions or extraction_telemetry:
+        correction_set = set(correction_fields or [])
+        pending_set = set(pending_clarification_fields or [])
+
+        if has_extraction_payload:
             latest_version = await self.normalized_repo.get_latest_profile_version(profile_id)
             profile_json = dict(latest_version.get("profile_json") or {}) if latest_version else {}
             trace = profile_json.get("chat_extraction_trace")
@@ -529,8 +532,6 @@ class ProfileService:
                 pending_candidates = {}
 
             persisted_fields = set(submission.get("applied_fields") or [])
-            correction_set = set(correction_fields or [])
-            pending_set = set(pending_clarification_fields or [])
 
             for field, extraction in (extractions or {}).items():
                 if not isinstance(extraction, dict):
@@ -592,7 +593,7 @@ class ProfileService:
             "applied_fields": submission.get("applied_fields", []),
             "clarification_queue": submission.get("clarification_queue", []),
             "pending_clarification_fields": list(pending_set),
-            "correction_fields": list(correction_fields or []),
+            "correction_fields": list(correction_set),
             "extraction_telemetry": self._merge_extraction_telemetry(None, extraction_telemetry),
             "readiness": readiness,
             "chat_context": {"chat_id": chat_id, "message_id": message_id},

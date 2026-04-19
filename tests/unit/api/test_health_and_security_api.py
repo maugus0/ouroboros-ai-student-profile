@@ -1,5 +1,6 @@
 """Unit tests for basic health and security API behavior."""
 
+import json
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -115,6 +116,16 @@ def test_valid_internal_bearer_token_returns_non_401_when_enabled(client, monkey
     assert response.status_code not in (401, 403)
 
 
+def test_internal_bearer_token_verification_bypassed_when_disabled(client, monkeypatch):
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_VERIFY_ENABLED", False)
+
+    response = client.get(
+        "/api/v1/profiles/non-existent-id",
+        headers={"X-User-ID": "user-123"},
+    )
+    assert response.status_code not in (401, 403)
+
+
 def test_invalid_internal_bearer_token_rejected(client, monkeypatch):
     monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_VERIFY_ENABLED", True)
     monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_SIGNING_ALGORITHM", "HS256")
@@ -174,6 +185,9 @@ def test_internal_bearer_token_rejected_when_expired(client, monkeypatch):
 def test_internal_bearer_token_uses_jwks_for_kid_resolution(client, monkeypatch):
     private_pem, public_pem = _generate_rsa_keypair()
 
+    async def _resolve_jwks_key_mock(_url: str, _kid: str) -> str:
+        return public_pem
+
     monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_VERIFY_ENABLED", True)
     monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_SIGNING_ALGORITHM", "RS256")
     monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_PUBLIC_KEY", "")
@@ -184,13 +198,37 @@ def test_internal_bearer_token_uses_jwks_for_kid_resolution(client, monkeypatch)
     monkeypatch.setattr("app.middleware.service_auth._jwks_cache_by_url", {})
     monkeypatch.setattr(
         "app.middleware.service_auth._resolve_jwks_key",
-        lambda _url, _kid: public_pem,
+        _resolve_jwks_key_mock,
     )
 
     response = client.get(
         "/api/v1/profiles/non-existent-id",
         headers={
             "Authorization": _build_internal_bearer_token_rs256(private_pem, kid="internal-v5"),
+            "X-User-ID": "user-123",
+        },
+    )
+    assert response.status_code not in (401, 403)
+
+
+def test_internal_bearer_token_uses_configured_public_keys_by_kid_without_jwks(client, monkeypatch):
+    private_pem, public_pem = _generate_rsa_keypair()
+
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_VERIFY_ENABLED", True)
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_SIGNING_ALGORITHM", "RS256")
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_PUBLIC_KEY", "")
+    monkeypatch.setattr(
+        "app.middleware.service_auth.settings.INTERNAL_TOKEN_PUBLIC_KEYS",
+        json.dumps({"internal-config-kid": public_pem.replace("\n", "\\n")}),
+    )
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_JWKS_URL", "")
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_AUDIENCE", "ouroboros.student-profile")
+    monkeypatch.setattr("app.middleware.service_auth.settings.INTERNAL_TOKEN_ISSUER", "ouroboros-orchestrator-internal")
+
+    response = client.get(
+        "/api/v1/profiles/non-existent-id",
+        headers={
+            "Authorization": _build_internal_bearer_token_rs256(private_pem, kid="internal-config-kid"),
             "X-User-ID": "user-123",
         },
     )

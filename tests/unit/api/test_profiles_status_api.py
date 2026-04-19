@@ -3,7 +3,7 @@
 
 def test_get_profile_status(client, monkeypatch, service_token_header):
     async def fake_get_profile_status(user_id: str, intent: str | None = None):
-        assert user_id == "user-123"
+        assert user_id == "test-user"
         assert intent == "program_discovery"
         return {
             "user_id": user_id,
@@ -17,16 +17,26 @@ def test_get_profile_status(client, monkeypatch, service_token_header):
 
     response = client.get(
         "/api/v1/profiles/status",
-        headers={**service_token_header, "X-User-ID": "user-123"},
+        headers={**service_token_header, "X-User-ID": "test-user"},
         params={"intent": "program_discovery"},
     )
 
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["user_id"] == "user-123"
+    assert payload["user_id"] == "test-user"
     assert payload["completed"] is False
     assert payload["missing_fields"] == ["email", "gpa"]
     assert payload["intent"] == "program_discovery"
+
+
+def test_get_profile_status_rejects_mismatched_header_and_jwt_sub(client, service_token_header):
+    response = client.get(
+        "/api/v1/profiles/status",
+        headers={**service_token_header, "X-User-ID": "different-user"},
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "X-User-ID does not match token subject"
 
 
 def test_sync_user_profile(client, monkeypatch, service_token_header):

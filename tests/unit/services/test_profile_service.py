@@ -623,6 +623,65 @@ async def test_collect_from_chat_preserves_ambiguous_field_candidates_until_clar
 
 
 @pytest.mark.asyncio
+async def test_collect_from_chat_fields_only_without_extraction_payload_returns_without_unbound_errors():
+    service = ProfileService()
+
+    class _StubProfileRepo:
+        async def get_latest_profile_by_user_id(self, _user_id):
+            return {"id": "profile-1", "profile_version": 1}
+
+        async def get_profile_by_id(self, _profile_id):
+            return {"id": "profile-1", "profile_version": 1}
+
+        async def update_profile(self, _profile_id, _updates):
+            return 1
+
+    class _StubNormalizedRepo:
+        async def get_latest_profile_version(self, _profile_id):
+            return {"profile_json": {"clarification_queue": [], "confidence_map": {}}}
+
+        async def create_profile_version_snapshot(self, _profile_id, _version_number, _profile_json, _change_reason):
+            return "ver-2"
+
+    service.profile_repo = _StubProfileRepo()
+    service.normalized_repo = _StubNormalizedRepo()
+
+    async def _stub_submit_clarifications(_profile_id, _answers):
+        return {
+            "applied_fields": ["target_study_country"],
+            "clarification_queue": [],
+        }
+
+    async def _stub_get_profile_status(_user_id, intent=None):
+        return {
+            "user_id": "user-1",
+            "completed": False,
+            "missing_fields": ["gpa"],
+            "optional_missing_fields": [],
+            "updated_at": None,
+            "intent": intent,
+        }
+
+    service.submit_clarifications = _stub_submit_clarifications  # type: ignore[method-assign]
+    service.get_profile_status = _stub_get_profile_status  # type: ignore[method-assign]
+
+    result = await service.collect_from_chat(
+        user_id="user-1",
+        fields={"target_study_country": "Australia"},
+        extractions={},
+        extraction_telemetry={},
+        pending_clarification_fields=[],
+        correction_fields=[],
+        chat_id="chat-1",
+        message_id="msg-1",
+    )
+
+    assert result["applied_fields"] == ["target_study_country"]
+    assert result["pending_clarification_fields"] == []
+    assert result["correction_fields"] == []
+
+
+@pytest.mark.asyncio
 async def test_get_profile_status_scans_nested_json_properties_for_required_fields():
     service = ProfileService()
 
