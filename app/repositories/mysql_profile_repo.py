@@ -40,7 +40,7 @@ class ProfileRepository(MySQLBaseRepository):
         profile_id = generate_uuid()
         query = """
             INSERT INTO student_profiles (
-                id, full_name, email, phone, nationality, date_of_birth,
+                id, user_id, full_name, email, phone, nationality, date_of_birth,
                 current_degree_level, target_degree_level,
                 target_degree_confidence, target_degree_source,
                 target_degree_needs_clarification,
@@ -49,7 +49,7 @@ class ProfileRepository(MySQLBaseRepository):
                 llm_model_used, llm_fallback_used, llm_fallback_reason,
                 total_processing_time_ms
             ) VALUES (
-                %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s,
                 %s, %s, %s, %s, %s,
                 %s, %s, %s, %s,
                 %s, %s,
@@ -58,6 +58,7 @@ class ProfileRepository(MySQLBaseRepository):
         """
         params = (
             profile_id,
+            profile_data.get("user_id"),
             profile_data.get("full_name"),
             profile_data.get("email"),
             profile_data.get("phone"),
@@ -82,6 +83,11 @@ class ProfileRepository(MySQLBaseRepository):
         await self.execute_write(query, params)
         logger.info("profile_created", profile_id=profile_id)
         return profile_id
+
+    async def get_latest_profile_by_user_id(self, user_id: str) -> dict[str, Any] | None:
+        """Retrieve the latest profile for a given user id."""
+        query = "SELECT * FROM student_profiles WHERE user_id = %s ORDER BY updated_at DESC LIMIT 1"
+        return await self.execute_one(query, (user_id,))
 
     async def get_profile_by_id(self, profile_id: str) -> dict[str, Any] | None:
         """Retrieve a single profile by UUID."""

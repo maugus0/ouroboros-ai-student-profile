@@ -3,6 +3,7 @@
 
 CREATE TABLE IF NOT EXISTS student_profiles (
     id VARCHAR(36) PRIMARY KEY COMMENT 'UUID v4',
+    user_id VARCHAR(36) NULL,
 
     -- Personal Information
     full_name VARCHAR(255) NULL,
@@ -38,6 +39,7 @@ CREATE TABLE IF NOT EXISTS student_profiles (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
     INDEX idx_email (email),
+    INDEX idx_user_id (user_id),
     INDEX idx_target_degree (target_degree_level),
     INDEX idx_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

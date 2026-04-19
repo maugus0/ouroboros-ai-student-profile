@@ -22,6 +22,7 @@ def build_profile_fields(
         "target_degree_source": "academic",
         "target_degree_needs_clarification": "academic",
         "target_degree_reasoning": "academic",
+        "gpa": "academic",
         "gpa_highest": "academic",
         "gpa_scale": "academic",
         "publications": "research",

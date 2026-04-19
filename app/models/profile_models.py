@@ -10,9 +10,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 class ParseRequest(BaseModel):
     """Request body for POST /parse — sent by orchestrator."""
 
-    user_id: Optional[str] = Field(
-        default=None,
-        description="Deprecated: no longer persisted by this service",
+    user_id: Optional[str] = Field(default=None, description="Optional user id fallback when header/context is absent")
+    intent: Optional[str] = Field(
+        default="profile_completion",
+        description="Request-time intent passed through by the orchestrator",
     )
     document_type: str = Field(default="cv", pattern="^(cv|transcript|unknown)$")
     file_name: str
@@ -25,6 +26,53 @@ class ParseRequest(BaseModel):
         default=False,
         description="Whether to run automatic gap analysis immediately after profile creation",
     )
+
+
+class SyncUserProfileRequest(BaseModel):
+    """Request body for syncing basic user identity fields into student profile."""
+
+    user_id: Optional[str] = Field(default=None, description="Optional user id fallback when header/context is absent")
+    full_name: Optional[str] = Field(default=None, min_length=2, max_length=255)
+    email: Optional[str] = Field(default=None, max_length=255)
+
+    @field_validator("full_name", "email", mode="before")
+    @classmethod
+    def _strip_nullable_strings(cls, value: Any):
+        if isinstance(value, str):
+            value = value.strip()
+            return value or None
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def _validate_email_format(cls, value: Optional[str]):
+        if value is None:
+            return value
+        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", value):
+            raise ValueError("email must be a valid email address")
+        return value
+
+
+class CollectFromChatRequest(BaseModel):
+    """Request body for collecting profile field values from chat turns."""
+
+    user_id: Optional[str] = Field(default=None, description="Optional user id fallback when header/context is absent")
+    fields: dict[str, Any] = Field(default_factory=dict, description="Extracted profile fields from chat content")
+    extractions: dict[str, Any] = Field(
+        default_factory=dict,
+        description="Candidate extraction metadata by field (value/confidence/reason/source_span)",
+    )
+    extraction_telemetry: dict[str, Any] = Field(default_factory=dict)
+    pending_clarification_fields: list[str] = Field(default_factory=list)
+    correction_fields: list[str] = Field(default_factory=list)
+    chat_id: Optional[str] = Field(default=None)
+    message_id: Optional[str] = Field(default=None)
+
+    @model_validator(mode="after")
+    def _validate_payload(self):
+        if not self.fields and not self.extractions:
+            raise ValueError("fields or extractions must contain at least one extracted field")
+        return self
 
 
 class ProfileResponse(BaseModel):
@@ -70,6 +118,7 @@ class ProfileUpdate(BaseModel):
     email: Optional[str] = Field(default=None, max_length=255)
     phone: Optional[str] = Field(default=None, max_length=50)
     nationality: Optional[str] = Field(default=None, min_length=2, max_length=100)
+    current_degree_level: Optional[str] = None
     target_degree_level: Optional[str] = None
     gpa: Optional[float] = Field(default=None, ge=0.0, le=100.0)
     gpa_scale: Optional[float] = Field(default=None, gt=0.0, le=100.0)
@@ -111,6 +160,17 @@ class ProfileUpdate(BaseModel):
             raise ValueError("target_degree_level must be one of: bachelor, master, phd, unknown")
         return normalized
 
+    @field_validator("current_degree_level")
+    @classmethod
+    def _validate_current_degree_level(cls, value: Optional[str]):
+        if value is None:
+            return value
+        normalized = value.strip().lower()
+        allowed = {"high_school", "bachelor", "master", "phd", "unknown"}
+        if normalized not in allowed:
+            raise ValueError("current_degree_level must be one of: high_school, bachelor, master, phd, unknown")
+        return normalized
+
     @model_validator(mode="after")
     def _validate_model(self):
         provided = [
@@ -118,6 +178,7 @@ class ProfileUpdate(BaseModel):
             self.email,
             self.phone,
             self.nationality,
+            self.current_degree_level,
             self.target_degree_level,
             self.gpa,
             self.gpa_scale,
@@ -163,3 +224,12 @@ class GapAnalysisJobResponse(BaseModel):
     status: str
     error_message: Optional[str] = None
     result: Optional[dict[str, Any]] = None
+
+
+class ProfileStatusResponse(BaseModel):
+    """Readiness snapshot for an extracted student profile."""
+
+    user_id: str
+    completed: bool
+    missing_fields: list[str] = Field(default_factory=list)
+    updated_at: Optional[datetime] = None

@@ -11,8 +11,8 @@ from app.config import settings
 from app.core.logging import get_logger
 from app.llm.anthropic_client import call_anthropic
 from app.llm.openai_client import call_openai
-from app.llm.prompts import get_gap_analysis_prompt, get_profile_extraction_prompt
-from app.llm.schemas import ExtractedProfile
+from app.llm.prompts import get_gap_analysis_prompt, get_profile_extraction_prompt, get_target_degree_detection_prompt
+from app.llm.schemas import DegreeLevelEnum, ExtractedProfile, TargetDegreeDetectionResult
 from app.models.llm_models import LLMExtractionResult
 from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
 from app.utils.exceptions import LLMExtractionError
@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 
 PROFILE_EXTRACTION_PROMPT_VERSION = "profile_extraction_v2"
 GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v2"
+TARGET_DEGREE_PROMPT_VERSION = "target_degree_detection_v2"
 
 
 class LLMService:
@@ -34,29 +35,60 @@ class LLMService:
     ) -> LLMExtractionResult:
         """Extract structured profile data from document text using LLM.
 
-        Tries OpenAI first; falls back to Anthropic on failure.
+        Uses a cheap target-degree classifier first when no hint is provided,
+        then routes the main extraction to the light or strong model tier.
         """
+        detection_result: Optional[TargetDegreeDetectionResult] = None
+        if not target_degree_hint:
+            detection_result = await self.detect_target_degree(document_text)
+            if self._is_confident_target_detection(detection_result):
+                target_degree_hint = str(detection_result.target_degree_level or "unknown")
+
+        extraction_tier = self._select_extraction_tier(document_text, target_degree_hint, detection_result)
+        if extraction_tier["provider"] is None:
+            raise LLMExtractionError("No LLM API key configured for extraction")
+
+        budgeted_text, input_meta = self._budget_text(
+            document_text,
+            budget_chars=settings.LLM_EXTRACTION_INPUT_CHAR_BUDGET,
+            head_chars=settings.LLM_TRUNCATION_HEAD_CHARS,
+            tail_chars=settings.LLM_TRUNCATION_TAIL_CHARS,
+            label="profile_extraction",
+        )
         runtime_context: dict[str, Any] = {
             "document_metadata": {
                 "text_length": len(document_text),
                 "has_target_hint": target_degree_hint is not None,
+                "budgeted_text_length": len(budgeted_text),
+            },
+            "llm_budget": input_meta,
+            "llm_tiering": {
+                "target_degree_detection": detection_result.model_dump() if detection_result else None,
+                "extraction_tier": extraction_tier,
             },
         }
         if target_degree_hint:
             runtime_context["user_provided_target_degree"] = target_degree_hint
 
         system_prompt = get_profile_extraction_prompt(context=runtime_context, fmt="text")
-        user_content = self._build_extraction_input(document_text, target_degree_hint)
+        user_content, _ = self._build_extraction_input(budgeted_text, target_degree_hint)
 
         start = time.perf_counter()
         fallback_reason: Optional[str] = None
 
-        # Primary: OpenAI (required)
-        if not self._has_real_openai_key():
-            raise LLMExtractionError("OpenAI API key is not configured")
+        primary_provider = extraction_tier["provider"]
+        secondary_provider = extraction_tier["fallback_provider"]
+        primary_model = extraction_tier["model"]
+        primary_max_tokens = extraction_tier["max_tokens"]
 
         try:
-            result = await call_openai(system_prompt, user_content)
+            result = await self._call_provider(
+                primary_provider,
+                system_prompt,
+                user_content,
+                model=primary_model,
+                max_tokens=primary_max_tokens,
+            )
             profile = self._parse_profile(result["content"])
             latency = int((time.perf_counter() - start) * 1000)
             await self._log_llm_call(
@@ -67,7 +99,7 @@ class LLMService:
                 output_tokens=result.get("output_tokens"),
                 latency_ms=latency,
                 success=True,
-                retry_count=self._get_retry_count(call_openai),
+                retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
                 prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
             )
             return LLMExtractionResult(
@@ -82,21 +114,30 @@ class LLMService:
         except Exception as exc:  # pylint: disable=broad-exception-caught
             await self._log_llm_call(
                 operation="profile_extraction",
-                provider="openai",
-                model=settings.OPENAI_MODEL,
+                provider=primary_provider,
+                model=primary_model,
                 latency_ms=int((time.perf_counter() - start) * 1000),
                 success=False,
                 error_message=str(exc),
-                retry_count=self._get_retry_count(call_openai),
+                retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
                 prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
             )
-            logger.warning("openai_extraction_failed", error=str(exc))
-            fallback_reason = f"OpenAI failed: {exc}"
+            logger.warning("llm_extraction_failed", provider=primary_provider, error=str(exc))
+            fallback_reason = f"{primary_provider} failed: {exc}"
 
-        # Fallback: Anthropic (optional)
-        if self._has_real_anthropic_key():
+        if secondary_provider is not None:
             try:
-                result = await call_anthropic(system_prompt, user_content)
+                secondary_model = settings.OPENAI_MODEL if secondary_provider == "openai" else settings.ANTHROPIC_MODEL
+                secondary_max_tokens = (
+                    settings.OPENAI_MAX_TOKENS if secondary_provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+                )
+                result = await self._call_provider(
+                    secondary_provider,
+                    system_prompt,
+                    user_content,
+                    model=secondary_model,
+                    max_tokens=secondary_max_tokens,
+                )
                 profile = self._parse_profile(result["content"])
                 latency = int((time.perf_counter() - start) * 1000)
                 await self._log_llm_call(
@@ -107,7 +148,9 @@ class LLMService:
                     output_tokens=result.get("output_tokens"),
                     latency_ms=latency,
                     success=True,
-                    retry_count=self._get_retry_count(call_anthropic),
+                    retry_count=self._get_retry_count(
+                        call_openai if secondary_provider == "openai" else call_anthropic
+                    ),
                     prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
                 )
                 return LLMExtractionResult(
@@ -123,24 +166,34 @@ class LLMService:
             except Exception as exc:  # pylint: disable=broad-exception-caught
                 await self._log_llm_call(
                     operation="profile_extraction",
-                    provider="anthropic",
-                    model=settings.ANTHROPIC_MODEL,
+                    provider=secondary_provider,
+                    model=secondary_model,
                     latency_ms=int((time.perf_counter() - start) * 1000),
                     success=False,
                     error_message=str(exc),
-                    retry_count=self._get_retry_count(call_anthropic),
+                    retry_count=self._get_retry_count(
+                        call_openai if secondary_provider == "openai" else call_anthropic
+                    ),
                     prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
                 )
-                logger.error("anthropic_extraction_failed", error=str(exc))
+                logger.error("llm_extraction_failed", provider=secondary_provider, error=str(exc))
                 raise LLMExtractionError(f"Both LLM providers failed. Last error: {exc}") from exc
-        else:
-            # No fallback configured; report only OpenAI error
-            raise LLMExtractionError(
-                f"OpenAI extraction failed and Anthropic fallback is not configured. Error: {fallback_reason}"
-            )
+
+        provider_name = primary_provider.title()
+        raise LLMExtractionError(
+            f"{provider_name} extraction failed and no fallback provider is configured. " f"Error: {fallback_reason}"
+        )
 
     async def run_gap_analysis(self, profile_json: dict, target_degree: str, profile_id: Optional[str] = None) -> dict:
         """Run a gap analysis on an extracted profile."""
+        profile_text = json.dumps(profile_json, indent=2, default=str)
+        budgeted_profile_text, input_meta = self._budget_text(
+            profile_text,
+            budget_chars=settings.LLM_GAP_ANALYSIS_INPUT_CHAR_BUDGET,
+            head_chars=settings.LLM_TRUNCATION_HEAD_CHARS,
+            tail_chars=settings.LLM_TRUNCATION_TAIL_CHARS,
+            label="gap_analysis",
+        )
         runtime_context: dict[str, Any] = {
             "target_degree": target_degree,
             "profile_summary": {
@@ -148,15 +201,65 @@ class LLMService:
                 "education_count": len(profile_json.get("education", [])),
                 "research_count": len(profile_json.get("research_experience", [])),
             },
+            "llm_budget": input_meta,
         }
         system_prompt = get_gap_analysis_prompt(context=runtime_context, fmt="text")
-        user_content = (
-            f"TARGET DEGREE: {target_degree}\n\nSTUDENT PROFILE:\n" f"{json.dumps(profile_json, indent=2, default=str)}"
-        )
+        user_content = f"TARGET DEGREE: {target_degree}\n\nSTUDENT PROFILE:\n{budgeted_profile_text}"
+
+        primary_provider = self._select_gap_analysis_provider(profile_text)
+        fallback_provider = "anthropic" if primary_provider == "openai" else "openai"
 
         try:
-            if self._has_real_openai_key():
-                result = await call_openai(system_prompt, user_content)
+            result = await self._call_provider(
+                primary_provider,
+                system_prompt,
+                user_content,
+                model=settings.OPENAI_MODEL if primary_provider == "openai" else settings.ANTHROPIC_MODEL,
+                max_tokens=(
+                    settings.OPENAI_MAX_TOKENS if primary_provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+                ),
+            )
+            await self._log_llm_call(
+                operation="gap_analysis",
+                provider=result["provider"],
+                model=result["model"],
+                profile_id=profile_id,
+                input_tokens=result.get("input_tokens"),
+                output_tokens=result.get("output_tokens"),
+                success=True,
+                retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
+                prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
+            )
+            return result["content"]
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await self._log_llm_call(
+                operation="gap_analysis",
+                provider=primary_provider,
+                model=settings.OPENAI_MODEL if primary_provider == "openai" else settings.ANTHROPIC_MODEL,
+                profile_id=profile_id,
+                success=False,
+                error_message=str(exc),
+                retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
+                prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
+            )
+            logger.warning("gap_analysis_failed", provider=primary_provider, error=str(exc))
+
+        if fallback_provider == "openai" and not self._has_real_openai_key():
+            fallback_provider = None
+        elif fallback_provider == "anthropic" and not self._has_real_anthropic_key():
+            fallback_provider = None
+
+        if fallback_provider is not None:
+            try:
+                result = await self._call_provider(
+                    fallback_provider,
+                    system_prompt,
+                    user_content,
+                    model=settings.OPENAI_MODEL if fallback_provider == "openai" else settings.ANTHROPIC_MODEL,
+                    max_tokens=(
+                        settings.OPENAI_MAX_TOKENS if fallback_provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+                    ),
+                )
                 await self._log_llm_call(
                     operation="gap_analysis",
                     provider=result["provider"],
@@ -165,63 +268,224 @@ class LLMService:
                     input_tokens=result.get("input_tokens"),
                     output_tokens=result.get("output_tokens"),
                     success=True,
-                    retry_count=self._get_retry_count(call_openai),
+                    retry_count=self._get_retry_count(call_openai if fallback_provider == "openai" else call_anthropic),
                     prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
                 )
                 return result["content"]
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            await self._log_llm_call(
-                operation="gap_analysis",
-                provider="openai",
-                model=settings.OPENAI_MODEL,
-                profile_id=profile_id,
-                success=False,
-                error_message=str(exc),
-                retry_count=self._get_retry_count(call_openai),
-                prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
-            )
-            logger.warning("openai_gap_analysis_failed", error=str(exc))
-
-        try:
-            if self._has_real_anthropic_key():
-                result = await call_anthropic(system_prompt, user_content)
+            except Exception as exc:  # pylint: disable=broad-exception-caught
                 await self._log_llm_call(
                     operation="gap_analysis",
-                    provider=result["provider"],
-                    model=result["model"],
+                    provider=fallback_provider,
+                    model=settings.OPENAI_MODEL if fallback_provider == "openai" else settings.ANTHROPIC_MODEL,
                     profile_id=profile_id,
-                    input_tokens=result.get("input_tokens"),
-                    output_tokens=result.get("output_tokens"),
-                    success=True,
-                    retry_count=self._get_retry_count(call_anthropic),
+                    success=False,
+                    error_message=str(exc),
+                    retry_count=self._get_retry_count(call_openai if fallback_provider == "openai" else call_anthropic),
                     prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
                 )
-                return result["content"]
-        except Exception as exc:  # pylint: disable=broad-exception-caught
-            await self._log_llm_call(
-                operation="gap_analysis",
-                provider="anthropic",
-                model=settings.ANTHROPIC_MODEL,
-                profile_id=profile_id,
-                success=False,
-                error_message=str(exc),
-                retry_count=self._get_retry_count(call_anthropic),
-                prompt_template_version=GAP_ANALYSIS_PROMPT_VERSION,
-            )
-            logger.error("anthropic_gap_analysis_failed", error=str(exc))
-            raise LLMExtractionError(f"Gap analysis failed: {exc}") from exc
+                logger.error("gap_analysis_failed", provider=fallback_provider, error=str(exc))
+                raise LLMExtractionError(f"Gap analysis failed: {exc}") from exc
 
         raise LLMExtractionError("No LLM API key configured for gap analysis")
 
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_extraction_input(text: str, target_degree_hint: Optional[str] = None) -> str:
+    def _build_extraction_input(text: str, target_degree_hint: Optional[str] = None) -> tuple[str, dict[str, Any]]:
         parts = []
         if target_degree_hint:
             parts.append(f"USER-PROVIDED TARGET DEGREE: {target_degree_hint}")
         parts.append(f"DOCUMENT TEXT:\n{text}")
-        return "\n\n".join(parts)
+        return "\n\n".join(parts), {"text_length": len(text), "truncated": "[TRUNCATED" in text}
+
+    async def detect_target_degree(self, document_text: str) -> TargetDegreeDetectionResult:
+        """Run a cheap first-pass classifier for target degree intent."""
+        if not document_text.strip():
+            return TargetDegreeDetectionResult()
+
+        budgeted_text, input_meta = self._budget_text(
+            document_text,
+            budget_chars=settings.LLM_CLASSIFIER_INPUT_CHAR_BUDGET,
+            head_chars=settings.LLM_TRUNCATION_HEAD_CHARS,
+            tail_chars=settings.LLM_TRUNCATION_TAIL_CHARS,
+            label="target_degree_detection",
+        )
+        runtime_context: dict[str, Any] = {
+            "document_metadata": {
+                "text_length": len(document_text),
+                "budgeted_text_length": len(budgeted_text),
+            },
+            "llm_budget": input_meta,
+        }
+        system_prompt = get_target_degree_detection_prompt(context=runtime_context, fmt="text")
+
+        provider = (
+            "openai" if self._has_real_openai_key() else ("anthropic" if self._has_real_anthropic_key() else None)
+        )
+        if provider is None:
+            return TargetDegreeDetectionResult()
+
+        model = settings.TARGET_DEGREE_MODEL if provider == "openai" else settings.ANTHROPIC_MODEL
+        max_tokens = (
+            settings.TARGET_DEGREE_MAX_TOKENS if provider == "openai" else min(512, settings.ANTHROPIC_MAX_TOKENS)
+        )
+
+        try:
+            result = await self._call_provider(
+                provider, system_prompt, budgeted_text, model=model, max_tokens=max_tokens
+            )
+            normalized = self._normalize_target_degree_detection(result.get("content") or {})
+            await self._log_llm_call(
+                operation="target_degree_detection",
+                provider=result["provider"],
+                model=result["model"],
+                input_tokens=result.get("input_tokens"),
+                output_tokens=result.get("output_tokens"),
+                success=True,
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=TARGET_DEGREE_PROMPT_VERSION,
+            )
+            return normalized
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await self._log_llm_call(
+                operation="target_degree_detection",
+                provider=provider,
+                model=model,
+                success=False,
+                error_message=str(exc),
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=TARGET_DEGREE_PROMPT_VERSION,
+            )
+            logger.warning("target_degree_detection_failed", provider=provider, error=str(exc))
+            return TargetDegreeDetectionResult()
+
+    def _select_extraction_tier(
+        self,
+        document_text: str,
+        target_degree_hint: Optional[str],
+        detection_result: Optional[TargetDegreeDetectionResult],
+    ) -> dict[str, Any]:
+        ambiguous = bool(detection_result and not self._is_confident_target_detection(detection_result))
+        long_document = len(document_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD
+        use_strong_model = ambiguous or long_document
+
+        if use_strong_model and self._has_real_anthropic_key():
+            return {
+                "provider": "anthropic",
+                "fallback_provider": "openai" if self._has_real_openai_key() else None,
+                "model": settings.ANTHROPIC_MODEL,
+                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+            }
+
+        if self._has_real_openai_key():
+            return {
+                "provider": "openai",
+                "fallback_provider": "anthropic" if self._has_real_anthropic_key() else None,
+                "model": settings.OPENAI_MODEL,
+                "max_tokens": settings.OPENAI_MAX_TOKENS,
+            }
+
+        if self._has_real_anthropic_key():
+            return {
+                "provider": "anthropic",
+                "fallback_provider": None,
+                "model": settings.ANTHROPIC_MODEL,
+                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+            }
+
+        return {"provider": None, "fallback_provider": None, "model": None, "max_tokens": None}
+
+    def _select_gap_analysis_provider(self, profile_text: str) -> str:
+        if len(profile_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD and self._has_real_anthropic_key():
+            return "anthropic"
+        if self._has_real_openai_key():
+            return "openai"
+        if self._has_real_anthropic_key():
+            return "anthropic"
+        return "openai"
+
+    @staticmethod
+    def _budget_text(
+        text: str,
+        *,
+        budget_chars: int,
+        head_chars: int,
+        tail_chars: int,
+        label: str,
+    ) -> tuple[str, dict[str, Any]]:
+        clean_text = text.strip()
+        if len(clean_text) <= budget_chars:
+            return clean_text, {
+                "label": label,
+                "original_length": len(clean_text),
+                "budget_chars": budget_chars,
+                "truncated": False,
+                "truncated_chars": 0,
+            }
+
+        marker = (
+            f"\n\n[TRUNCATED {label} CONTENT: original_length={len(clean_text)}, " f"budget_chars={budget_chars}]\n\n"
+        )
+        available_budget = max(0, budget_chars - len(marker))
+        head = min(max(0, head_chars), available_budget)
+        tail = min(max(0, tail_chars), max(0, available_budget - head))
+        if head + tail < available_budget:
+            head = available_budget - tail
+
+        truncated_text = f"{clean_text[:head]}{marker}{clean_text[-tail:] if tail else ''}"
+        return truncated_text, {
+            "label": label,
+            "original_length": len(clean_text),
+            "budget_chars": budget_chars,
+            "truncated": True,
+            "truncated_chars": len(clean_text) - len(truncated_text),
+        }
+
+    @staticmethod
+    def _is_confident_target_detection(result: TargetDegreeDetectionResult | None) -> bool:
+        if result is None:
+            return False
+        if result.needs_clarification:
+            return False
+        if result.target_degree_level is None:
+            return False
+        if str(result.target_degree_level) == "unknown":
+            return False
+        confidence = result.confidence or 0.0
+        return confidence >= settings.LLM_TARGET_DEGREE_CONFIDENCE_THRESHOLD
+
+    @classmethod
+    def _normalize_target_degree_detection(cls, raw_content: dict[str, Any]) -> TargetDegreeDetectionResult:
+        payload = dict(raw_content or {})
+        target_degree = cls._normalize_degree_level(payload.get("target_degree_level"))
+        confidence = payload.get("confidence")
+        try:
+            confidence_value = float(confidence)
+        except (TypeError, ValueError):
+            confidence_value = 0.0
+        confidence_value = min(max(confidence_value, 0.0), 1.0)
+        return TargetDegreeDetectionResult(
+            target_degree_level=target_degree,
+            confidence=confidence_value,
+            source=str(payload.get("source") or "unknown"),
+            needs_clarification=bool(payload.get("needs_clarification")),
+            reasoning=str(payload.get("reasoning") or "").strip() or None,
+        )
+
+    @staticmethod
+    async def _call_provider(
+        provider: str,
+        system_prompt: str,
+        user_content: str,
+        *,
+        model: str | None,
+        max_tokens: int | None,
+    ) -> dict:
+        if provider == "openai":
+            return await call_openai(system_prompt, user_content, model=model, max_tokens=max_tokens)
+        if provider == "anthropic":
+            return await call_anthropic(system_prompt, user_content, model=model, max_tokens=max_tokens)
+        raise LLMExtractionError("No LLM provider configured")
 
     @staticmethod
     def _has_real_openai_key() -> bool:
@@ -333,17 +597,17 @@ class LLMService:
         return content
 
     @staticmethod
-    def _normalize_degree_level(value: Any) -> str:
+    def _normalize_degree_level(value: Any) -> DegreeLevelEnum:
         if value is None:
-            return "unknown"
+            return DegreeLevelEnum.UNKNOWN
         text = str(value).strip().lower()
         if "phd" in text or "doctor" in text:
-            return "phd"
+            return DegreeLevelEnum.PHD
         if "master" in text:
-            return "master"
+            return DegreeLevelEnum.MASTER
         if "bachelor" in text or re.search(r"\bbs\b|\bba\b|\bbsc\b", text):
-            return "bachelor"
-        return "unknown"
+            return DegreeLevelEnum.BACHELOR
+        return DegreeLevelEnum.UNKNOWN
 
     @staticmethod
     def _normalize_degree_source(value: Any) -> str:

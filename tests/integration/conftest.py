@@ -1,8 +1,10 @@
 """Pytest configuration and fixtures for integration tests with real MySQL."""
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import jwt
 import mysql.connector
 import pytest
 from dotenv import load_dotenv
@@ -32,8 +34,23 @@ def integration_client():
 
 @pytest.fixture
 def service_token_header():
-    """Header value for service authentication."""
-    return {"X-Service-Token": settings.X_SERVICE_TOKEN}
+    """Header value for internal bearer-token authentication."""
+    now = datetime.now(timezone.utc)
+    token = jwt.encode(
+        {
+            "sub": "integration-test-user",
+            "aud": settings.INTERNAL_TOKEN_AUDIENCE,
+            "iss": settings.INTERNAL_TOKEN_ISSUER,
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(hours=1)).timestamp()),
+            "sid": "integration-test-session",
+            "trace_id": "integration-test-trace",
+            "jti": "integration-test-jti",
+        },
+        settings.INTERNAL_TOKEN_PUBLIC_KEY,
+        algorithm=settings.INTERNAL_TOKEN_SIGNING_ALGORITHM,
+    )
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture(scope="session", autouse=True)

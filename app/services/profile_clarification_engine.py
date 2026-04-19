@@ -14,7 +14,13 @@ def apply_react_decision_pattern(profile_data: dict[str, Any]) -> dict[str, Any]
     """
     normalized = dict(profile_data or {})
 
+    # Canonicalize legacy extraction key to the readiness-facing field name.
+    if "gpa" not in normalized and "gpa_highest" in normalized:
+        normalized["gpa"] = normalized.get("gpa_highest")
+
     confidence_map = normalized.get("confidence_map") if isinstance(normalized.get("confidence_map"), dict) else {}
+    if "gpa" not in confidence_map and "gpa_highest" in confidence_map:
+        confidence_map["gpa"] = confidence_map.get("gpa_highest")
     contradiction_flags = (
         normalized.get("contradiction_flags") if isinstance(normalized.get("contradiction_flags"), list) else []
     )
@@ -48,7 +54,7 @@ def apply_react_decision_pattern(profile_data: dict[str, Any]) -> dict[str, Any]
             "min_confidence": 0.7,
             "require_when_missing": True,
         },
-        "gpa_highest": {
+        "gpa": {
             "question": "What is your highest GPA?",
             "min_confidence": 0.65,
             "require_when_missing": False,

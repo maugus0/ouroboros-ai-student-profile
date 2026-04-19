@@ -9,8 +9,10 @@ class _FakeFlowProfileService:
 
     async def parse_and_create_profile(
         self,
+        user_id: str,
         file_name: str,
         file_content_base64: str,
+        intent: str | None = None,
         document_type: str = "cv",
         target_degree_hint: str | None = None,
         run_gap_analysis: bool = True,
@@ -18,6 +20,7 @@ class _FakeFlowProfileService:
         profile_id = "sim-profile-1"
         self._profiles[profile_id] = {
             "profile_id": profile_id,
+            "user_id": user_id,
             "profile_data": {
                 "full_name": "John Doe",
                 "email": "john.doe@example.com",
@@ -36,6 +39,7 @@ class _FakeFlowProfileService:
             "target_degree_hint": target_degree_hint,
             "run_gap_analysis": run_gap_analysis,
             "file_content_base64": file_content_base64,
+            "intent": intent,
         }
         return self._profiles[profile_id]
 
@@ -74,7 +78,7 @@ def test_parse_then_resolve_clarification_flow(client, monkeypatch, service_toke
     # 1) Simulate parse call from orchestrator.
     parse_resp = client.post(
         "/api/v1/profiles/parse",
-        headers=service_token_header,
+        headers={**service_token_header, "X-User-ID": "user-1"},
         json={
             "file_name": "cv.pdf",
             "file_content_base64": "aGVsbG8=",

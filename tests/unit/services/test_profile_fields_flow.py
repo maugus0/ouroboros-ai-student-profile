@@ -11,9 +11,9 @@ def test_build_profile_fields_generates_rows_for_meaningful_values():
         "technical_skills": ["Python", "FastAPI"],
         "education": [{"institution": "UGM", "degree": "CS"}],
         "research_interests": [],
-        "gpa_highest": 3.38,
-        "confidence_map": {"full_name": 1.0, "email": 1.0, "gpa_highest": 0.9},
-        "evidence_map": {"full_name": "Header", "email": "Header", "gpa_highest": "Education section"},
+        "gpa": 3.38,
+        "confidence_map": {"full_name": 1.0, "email": 1.0, "gpa": 0.9},
+        "evidence_map": {"full_name": "Header", "email": "Header", "gpa": "Education section"},
     }
 
     rows = ProfileService._build_profile_fields("profile-1", "doc-1", profile_data)
@@ -21,7 +21,7 @@ def test_build_profile_fields_generates_rows_for_meaningful_values():
     field_names = {row["field_name"] for row in rows}
     assert "full_name" in field_names
     assert "email" in field_names
-    assert "gpa_highest" in field_names
+    assert "gpa" in field_names
     assert "research_interests" not in field_names  # empty list should be skipped
     assert "technical_skills" not in field_names
     assert "education" not in field_names
