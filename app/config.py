@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     TARGET_DEGREE_MODEL: str = "gpt-4o-mini"
     TARGET_DEGREE_MAX_TOKENS: int = 400
 
+    PROFILE_EXTRACTION_PROMPT_VERSION: str = "v2"
+    TARGET_DEGREE_PROMPT_VERSION: str = "v2"
+    GAP_ANALYSIS_PROMPT_VERSION: str = "v2"
+
     LLM_CLASSIFIER_INPUT_CHAR_BUDGET: int = 6000
     LLM_EXTRACTION_INPUT_CHAR_BUDGET: int = 14000
     LLM_GAP_ANALYSIS_INPUT_CHAR_BUDGET: int = 12000
@@ -66,6 +70,12 @@ class Settings(BaseSettings):
 
     TESSERACT_PATH: str = ""
     OCR_LANGUAGE: str = "eng"
+
+    # ========== Security (LLMOps) ==========
+    ENABLE_PROMPT_INJECTION_DETECTION: bool = True
+    ENABLE_OUTPUT_VALIDATION: bool = True
+    MAX_INPUT_LENGTH: int = 10000
+    ENABLE_SECURITY_CHECKS: bool = True
 
     # ========== Application ==========
     LOG_LEVEL: str = "INFO"

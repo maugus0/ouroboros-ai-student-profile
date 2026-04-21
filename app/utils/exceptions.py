@@ -31,6 +31,13 @@ class ValidationError(StudentProfileBaseError):
         super().__init__(message=message, status_code=422)
 
 
+class PromptInjectionError(StudentProfileBaseError):
+    """Raised when potential prompt injection content is detected."""
+
+    def __init__(self, message: str = "Potential prompt injection detected"):
+        super().__init__(message=message, status_code=422)
+
+
 class ServiceAuthError(StudentProfileBaseError):
     """Raised when inter-service authentication fails."""
 

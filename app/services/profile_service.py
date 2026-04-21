@@ -654,6 +654,7 @@ class ProfileService:
 
         return {
             "user_id": user_id,
+            "profile_id": profile_id,
             "completed": completed,
             "missing_fields": missing_fields,
             "optional_missing_fields": optional_missing,

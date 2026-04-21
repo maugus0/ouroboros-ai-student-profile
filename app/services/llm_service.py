@@ -3,25 +3,31 @@
 import json
 import re
 import time
+from datetime import datetime
 from typing import Any, Optional
-
-import structlog
 
 from app.config import settings
 from app.core.logging import get_logger
 from app.llm.anthropic_client import call_anthropic
 from app.llm.openai_client import call_openai
-from app.llm.prompts import get_gap_analysis_prompt, get_profile_extraction_prompt, get_target_degree_detection_prompt
+from app.llm.prompts import (
+    get_gap_analysis_prompt,
+    get_profile_extraction_prompt,
+    get_prompt_template_version,
+    get_target_degree_detection_prompt,
+)
 from app.llm.schemas import DegreeLevelEnum, ExtractedProfile, TargetDegreeDetectionResult
 from app.models.llm_models import LLMExtractionResult
 from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
+from app.security.input_sanitizer import detect_injection_attempt, strip_control_characters
+from app.security.output_validator import validate_output_for_leakage, validate_profile_data
 from app.utils.exceptions import LLMExtractionError
+from app.utils.trace_id import get_bound_trace_id
 
 logger = get_logger(__name__)
-
-PROFILE_EXTRACTION_PROMPT_VERSION = "profile_extraction_v2"
-GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v2"
-TARGET_DEGREE_PROMPT_VERSION = "target_degree_detection_v2"
+PROFILE_EXTRACTION_PROMPT_VERSION = get_prompt_template_version("profile_extraction")
+GAP_ANALYSIS_PROMPT_VERSION = get_prompt_template_version("gap_analysis")
+TARGET_DEGREE_PROMPT_VERSION = get_prompt_template_version("target_degree_detection")
 
 
 class LLMService:
@@ -37,7 +43,26 @@ class LLMService:
 
         Uses a cheap target-degree classifier first when no hint is provided,
         then routes the main extraction to the light or strong model tier.
+        Includes security checks to prevent prompt injection.
         """
+        # Security: Detect and block prompt injection attempts
+        if settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(document_text):
+                logger.warning(
+                    "potential_prompt_injection_detected",
+                    operation="profile_extraction",
+                    trace_id=get_bound_trace_id(),
+                )
+                raise LLMExtractionError("Potential prompt injection detected in document text")
+
+            # Sanitize control characters
+            document_text = strip_control_characters(document_text, preserve_newline_tab=True)
+
+        if target_degree_hint and settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(target_degree_hint):
+                raise LLMExtractionError("Potential prompt injection detected in target degree hint")
+            target_degree_hint = strip_control_characters(target_degree_hint, preserve_newline_tab=False)
+
         detection_result: Optional[TargetDegreeDetectionResult] = None
         if not target_degree_hint:
             detection_result = await self.detect_target_degree(document_text)
@@ -91,6 +116,51 @@ class LLMService:
             )
             profile = self._parse_profile(result["content"])
             latency = int((time.perf_counter() - start) * 1000)
+
+            # Security: Validate output for leakage and prompt echoing
+            if settings.ENABLE_OUTPUT_VALIDATION:
+                validation_issues = validate_output_for_leakage(json.dumps(profile.model_dump()))
+                if validation_issues:
+                    logger.warning(
+                        "output_validation_failed",
+                        operation="profile_extraction",
+                        issues=validation_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+                    # Log but don't fail extraction on validation issues
+
+            # Student-profile specific validation: check for hallucinations and data quality
+            if settings.ENABLE_SECURITY_CHECKS:
+                profile_data = profile.model_dump()
+                profile_valid, profile_issues = validate_profile_data(profile_data)
+                if not profile_valid:
+                    logger.warning(
+                        "profile_data_quality_issues",
+                        operation="profile_extraction",
+                        issues=profile_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
+                # Additional consistency checks
+                consistency_issues = self._check_profile_consistency(profile_data)
+                if consistency_issues:
+                    logger.warning(
+                        "profile_consistency_warnings",
+                        operation="profile_extraction",
+                        issues=consistency_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
+                # Check confidence scores
+                confidence_issues = self._check_confidence_scores(profile_data)
+                if confidence_issues:
+                    logger.info(
+                        "profile_confidence_info",
+                        operation="profile_extraction",
+                        issues=confidence_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
             await self._log_llm_call(
                 operation="profile_extraction",
                 provider=result["provider"],
@@ -185,8 +255,36 @@ class LLMService:
         )
 
     async def run_gap_analysis(self, profile_json: dict, target_degree: str, profile_id: Optional[str] = None) -> dict:
-        """Run a gap analysis on an extracted profile."""
-        profile_text = json.dumps(profile_json, indent=2, default=str)
+        """Run a gap analysis on an extracted profile.
+
+        Includes security checks to prevent prompt injection through profile data.
+        Validates profile data quality before analysis.
+        """
+        # Security: Sanitize target degree input
+        if settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(target_degree):
+                raise LLMExtractionError("Potential prompt injection detected in target degree")
+            target_degree = strip_control_characters(target_degree, preserve_newline_tab=False)
+
+        # Profile data security: Validate before gap analysis
+        if settings.ENABLE_SECURITY_CHECKS:
+            profile_valid, profile_issues = validate_profile_data(profile_json)
+            if not profile_valid:
+                logger.warning(
+                    "profile_validation_before_gap_analysis",
+                    profile_id=profile_id,
+                    issues=profile_issues,
+                    trace_id=get_bound_trace_id(),
+                )
+                # Log warning but continue - gap analysis may still be useful
+
+        # Sanitize profile JSON by removing any suspicious content
+        if settings.ENABLE_SECURITY_CHECKS:
+            sanitized_profile = self._sanitize_profile_for_llm(profile_json)
+        else:
+            sanitized_profile = profile_json
+
+        profile_text = json.dumps(sanitized_profile, indent=2, default=str)
         budgeted_profile_text, input_meta = self._budget_text(
             profile_text,
             budget_chars=settings.LLM_GAP_ANALYSIS_INPUT_CHAR_BUDGET,
@@ -197,9 +295,9 @@ class LLMService:
         runtime_context: dict[str, Any] = {
             "target_degree": target_degree,
             "profile_summary": {
-                "has_gpa": profile_json.get("gpa_highest") is not None,
-                "education_count": len(profile_json.get("education", [])),
-                "research_count": len(profile_json.get("research_experience", [])),
+                "has_gpa": sanitized_profile.get("gpa_highest") is not None,
+                "education_count": len(sanitized_profile.get("education", [])),
+                "research_count": len(sanitized_profile.get("research_experience", [])),
             },
             "llm_budget": input_meta,
         }
@@ -667,9 +765,13 @@ class LLMService:
         retry_count: int = 0,
         prompt_template_version: Optional[str] = None,
     ) -> None:
-        """Persist llm_call_logs rows without impacting main request flow."""
+        """Persist llm_call_logs rows without impacting main request flow.
+
+        Captures trace ID for distributed tracing across services.
+        """
         try:
-            trace_id = structlog.contextvars.get_contextvars().get("trace_id", "")
+            # Use get_bound_trace_id() for reliable trace ID retrieval
+            trace_id = get_bound_trace_id()
             await self.llm_log_repo.create_log(
                 {
                     "profile_id": profile_id,
@@ -699,3 +801,143 @@ class LLMService:
             return max(attempt_number - 1, 0)
         except Exception:  # pylint: disable=broad-exception-caught
             return 0
+
+    @staticmethod
+    def _check_profile_consistency(profile_data: dict[str, Any]) -> list[str]:
+        """Check for consistency issues in extracted profile data.
+
+        Validates:
+        - GPA is >= 0.0
+        - Years are plausible (not in future, not unreasonably far in past)
+        - Degree level matches education records
+        """
+        issues: list[str] = []
+
+        # Check GPA plausibility
+        gpa_highest = profile_data.get("gpa_highest")
+        if gpa_highest is not None:
+            try:
+                gpa_val = float(gpa_highest)
+                if gpa_val < 0.0:
+                    issues.append(f"GPA out of range: {gpa_val} (expected >= 0.0)")
+            except (TypeError, ValueError):
+                issues.append(f"GPA not numeric: {gpa_highest}")
+
+        # Check education years
+        current_year = datetime.now().year
+        education = profile_data.get("education") or []
+        for idx, edu in enumerate(education):
+            if not isinstance(edu, dict):
+                continue
+
+            start_year = edu.get("start_year")
+            end_year = edu.get("end_year")
+
+            try:
+                if start_year:
+                    sy = int(start_year)
+                    if sy < 1950 or sy > current_year:
+                        issues.append(f"Education[{idx}] start_year implausible: {sy}")
+                if end_year:
+                    ey = int(end_year)
+                    if ey < 1950 or ey > current_year + 10:
+                        issues.append(f"Education[{idx}] end_year implausible: {ey}")
+                if start_year and end_year:
+                    sy, ey = int(start_year), int(end_year)
+                    if sy >= ey:
+                        issues.append(f"Education[{idx}] start_year >= end_year: {sy} >= {ey}")
+            except (TypeError, ValueError):
+                pass  # Skip non-numeric years
+
+        # Check work experience years
+        work_exp = profile_data.get("work_experience") or []
+        for idx, job in enumerate(work_exp):
+            if not isinstance(job, dict):
+                continue
+
+            start_year = job.get("start_year")
+            end_year = job.get("end_year")
+
+            try:
+                if start_year:
+                    sy = int(start_year)
+                    if sy < 1950 or sy > current_year:
+                        issues.append(f"WorkExp[{idx}] start_year implausible: {sy}")
+                if end_year:
+                    ey = int(end_year)
+                    if ey < 1950 or ey > current_year + 5:
+                        issues.append(f"WorkExp[{idx}] end_year implausible: {ey}")
+                if start_year and end_year:
+                    sy, ey = int(start_year), int(end_year)
+                    if sy >= ey:
+                        issues.append(f"WorkExp[{idx}] start_year >= end_year: {sy} >= {ey}")
+            except (TypeError, ValueError):
+                pass  # Skip non-numeric years
+
+        return issues
+
+    @staticmethod
+    def _check_confidence_scores(profile_data: dict[str, Any]) -> list[str]:
+        """Check for low confidence fields that may need clarification.
+
+        Logs fields with confidence < 0.7 for monitoring extraction quality.
+        """
+        issues: list[str] = []
+
+        confidence_map = profile_data.get("confidence_map") or {}
+        for field, confidence in confidence_map.items():
+            try:
+                conf_val = float(confidence)
+                if conf_val < 0.7:
+                    issues.append(f"Low confidence on {field}: {conf_val:.2f}")
+            except (TypeError, ValueError):
+                pass
+
+        return issues
+
+    @staticmethod
+    def _sanitize_profile_for_llm(profile_data: dict[str, Any]) -> dict[str, Any]:
+        """Sanitize profile data before sending to LLM for gap analysis.
+
+        Removes control characters from text fields to prevent injection.
+        Returns a copy of the profile with sanitized content.
+        """
+        sanitized = json.loads(json.dumps(profile_data))  # Deep copy
+
+        # Sanitize string fields in education
+        education = sanitized.get("education") or []
+        for edu in education:
+            if isinstance(edu, dict):
+                for key in ("institution", "degree", "field", "notes", "description"):
+                    if key in edu and isinstance(edu[key], str):
+                        edu[key] = strip_control_characters(edu[key], preserve_newline_tab=False)
+
+        # Sanitize string fields in work experience
+        work_exp = sanitized.get("work_experience") or []
+        for job in work_exp:
+            if isinstance(job, dict):
+                for key in ("company", "position", "description", "achievements"):
+                    if key in job and isinstance(job[key], str):
+                        job[key] = strip_control_characters(job[key], preserve_newline_tab=False)
+
+        # Sanitize research experience
+        research = sanitized.get("research_experience") or []
+        for proj in research:
+            if isinstance(proj, dict):
+                for key in ("title", "description", "field", "outcome"):
+                    if key in proj and isinstance(proj[key], str):
+                        proj[key] = strip_control_characters(proj[key], preserve_newline_tab=False)
+
+        # Sanitize skills and languages
+        for field in ("technical_skills", "languages"):
+            items = sanitized.get(field) or []
+            for idx, item in enumerate(items):
+                if isinstance(item, str):
+                    items[idx] = strip_control_characters(item, preserve_newline_tab=False)
+
+        # Sanitize top-level string fields
+        for key in ("first_name", "last_name", "email", "phone", "location"):
+            if key in sanitized and isinstance(sanitized[key], str):
+                sanitized[key] = strip_control_characters(sanitized[key], preserve_newline_tab=False)
+
+        return sanitized

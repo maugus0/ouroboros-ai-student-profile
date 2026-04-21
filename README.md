@@ -113,7 +113,9 @@ The Student Profile Agent is a critical microservice in the Ouroboros AI platfor
 - **Retry logic** via `tenacity` (exponential backoff)
 - **Structured output** validation via Pydantic schemas
 - **Context injection** — runtime metadata merged into JSON prompt templates
-- **Prompt versioning** — JSON templates in `prompts/` directory
+- **Prompt versioning** — active version resolved from environment variables at runtime
+- **LLMOps guardrails** — injection detection, output leakage checks, profile consistency checks, and confidence monitoring
+- **Traceable audit logs** — every LLM call stores `prompt_template_version`, provider, model, tokens, retries, and trace ID
 
 ### Profile Extraction
 
@@ -255,41 +257,49 @@ Swagger docs are available at `http://localhost:8001/docs`.
 
 ### Environment Variables
 
-| Variable                | Required    | Default                    | Description                                         |
-| ----------------------- | ----------- | -------------------------- | --------------------------------------------------- |
-| **Database**            |             |                            |                                                     |
-| `DB_HOST`               | No          | `localhost`                | MySQL host                                          |
-| `DB_PORT`               | No          | `3306`                     | MySQL port                                          |
-| `DB_NAME`               | No          | `student_profile_db`       | Database name                                       |
-| `DB_USERNAME`           | No          | `root`                     | MySQL user                                          |
-| `DB_PASSWORD`           | Yes         | —                          | MySQL password                                      |
-| `DB_POOL_SIZE`          | No          | `10`                       | Max connections in pool                             |
-| **Service Auth**        |             |                            |                                                     |
-| `X_SERVICE_TOKEN`       | Yes         | —                          | Inter-service auth token (shared with orchestrator) |
-| **LLM — OpenAI**        |             |                            |                                                     |
-| `OPENAI_API_KEY`        | Yes         | —                          | OpenAI API key                                      |
-| `OPENAI_MODEL`          | No          | `gpt-4o-mini`              | Model identifier                                    |
-| `OPENAI_MAX_TOKENS`     | No          | `2000`                     | Max output tokens                                   |
-| `OPENAI_TEMPERATURE`    | No          | `0.0`                      | Sampling temperature                                |
-| **LLM — Anthropic**     |             |                            |                                                     |
-| `ANTHROPIC_API_KEY`     | Recommended | —                          | Anthropic API key (fallback)                        |
-| `ANTHROPIC_MODEL`       | No          | `claude-sonnet-4-20250514` | Model identifier                                    |
-| `ANTHROPIC_MAX_TOKENS`  | No          | `2000`                     | Max output tokens                                   |
-| `LLM_MAX_RETRIES`       | No          | `3`                        | Max retries per provider call                       |
-| `LLM_RETRY_DELAY`       | No          | `2`                        | Retry delay (seconds)                               |
-| **Document Processing** |             |                            |                                                     |
-| `MAX_FILE_SIZE_MB`      | No          | `10`                       | Max upload size                                     |
-| `ALLOWED_EXTENSIONS`    | No          | `.pdf,.docx`               | Comma-separated                                     |
-| `TEMP_UPLOAD_DIR`       | No          | `/tmp/uploads`             | Temp file directory                                 |
-| `TESSERACT_PATH`        | No          | auto-detect                | Tesseract executable path                           |
-| `OCR_LANGUAGE`          | No          | `eng`                      | Tesseract language code                             |
-| **Application**         |             |                            |                                                     |
-| `LOG_LEVEL`             | No          | `INFO`                     | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL`             |
-| `USE_MOCK_DATA`         | No          | `true`                     | Use in-memory repos (tests/dev convenience)         |
-| `ALLOW_DB_FAILURE`      | No          | `false`                    | Continue if DB unavailable (tests only)             |
-| **Docker Runtime**      |             |                            |                                                     |
-| `RUN_STARTUP_SCRIPTS`   | No          | `true`                     | Toggle startup script execution in containers       |
-| `DOCKER_MYSQL_PORT`     | No          | `3308`                     | Host port mapped to MySQL in docker compose         |
+| Variable                            | Required    | Default                    | Description                                             |
+| ----------------------------------- | ----------- | -------------------------- | ------------------------------------------------------- |
+| **Database**                        |             |                            |                                                         |
+| `DB_HOST`                           | No          | `localhost`                | MySQL host                                              |
+| `DB_PORT`                           | No          | `3306`                     | MySQL port                                              |
+| `DB_NAME`                           | No          | `student_profile_db`       | Database name                                           |
+| `DB_USERNAME`                       | No          | `root`                     | MySQL user                                              |
+| `DB_PASSWORD`                       | Yes         | —                          | MySQL password                                          |
+| `DB_POOL_SIZE`                      | No          | `10`                       | Max connections in pool                                 |
+| **Service Auth**                    |             |                            |                                                         |
+| `X_SERVICE_TOKEN`                   | Yes         | —                          | Inter-service auth token (shared with orchestrator)     |
+| **LLM — OpenAI**                    |             |                            |                                                         |
+| `OPENAI_API_KEY`                    | Yes         | —                          | OpenAI API key                                          |
+| `OPENAI_MODEL`                      | No          | `gpt-4o-mini`              | Model identifier                                        |
+| `OPENAI_MAX_TOKENS`                 | No          | `2000`                     | Max output tokens                                       |
+| `OPENAI_TEMPERATURE`                | No          | `0.0`                      | Sampling temperature                                    |
+| **LLM — Anthropic**                 |             |                            |                                                         |
+| `ANTHROPIC_API_KEY`                 | Recommended | —                          | Anthropic API key (fallback)                            |
+| `ANTHROPIC_MODEL`                   | No          | `claude-sonnet-4-20250514` | Model identifier                                        |
+| `ANTHROPIC_MAX_TOKENS`              | No          | `2000`                     | Max output tokens                                       |
+| `LLM_MAX_RETRIES`                   | No          | `3`                        | Max retries per provider call                           |
+| `LLM_RETRY_DELAY`                   | No          | `2`                        | Retry delay (seconds)                                   |
+| `PROFILE_EXTRACTION_PROMPT_VERSION` | No          | `v2`                       | Prompt version for profile extraction (`v1`, `v2`, ...) |
+| `TARGET_DEGREE_PROMPT_VERSION`      | No          | `v2`                       | Prompt version for target-degree detection              |
+| `GAP_ANALYSIS_PROMPT_VERSION`       | No          | `v2`                       | Prompt version for gap-analysis prompt                  |
+| **LLMOps Security**                 |             |                            |                                                         |
+| `ENABLE_SECURITY_CHECKS`            | No          | `true`                     | Master switch for LLMOps input/output safety checks     |
+| `ENABLE_PROMPT_INJECTION_DETECTION` | No          | `true`                     | Detect prompt-injection patterns in user input          |
+| `ENABLE_OUTPUT_VALIDATION`          | No          | `true`                     | Detect leakage/echo patterns in model outputs           |
+| `MAX_INPUT_LENGTH`                  | No          | `10000`                    | Max accepted length before validation rejection         |
+| **Document Processing**             |             |                            |                                                         |
+| `MAX_FILE_SIZE_MB`                  | No          | `10`                       | Max upload size                                         |
+| `ALLOWED_EXTENSIONS`                | No          | `.pdf,.docx`               | Comma-separated                                         |
+| `TEMP_UPLOAD_DIR`                   | No          | `/tmp/uploads`             | Temp file directory                                     |
+| `TESSERACT_PATH`                    | No          | auto-detect                | Tesseract executable path                               |
+| `OCR_LANGUAGE`                      | No          | `eng`                      | Tesseract language code                                 |
+| **Application**                     |             |                            |                                                         |
+| `LOG_LEVEL`                         | No          | `INFO`                     | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL`                 |
+| `USE_MOCK_DATA`                     | No          | `true`                     | Use in-memory repos (tests/dev convenience)             |
+| `ALLOW_DB_FAILURE`                  | No          | `false`                    | Continue if DB unavailable (tests only)                 |
+| **Docker Runtime**                  |             |                            |                                                         |
+| `RUN_STARTUP_SCRIPTS`               | No          | `true`                     | Toggle startup script execution in containers           |
+| `DOCKER_MYSQL_PORT`                 | No          | `3308`                     | Host port mapped to MySQL in docker compose             |
 
 ### Docker / CI Prefix Compatibility
 
@@ -483,13 +493,31 @@ prompt = get_profile_extraction_prompt(
 )
 ```
 
-### Available Prompts
+### Available Prompt Files
 
 | File                              | Purpose                          |
 | --------------------------------- | -------------------------------- |
 | `profile_extraction_v2.json`      | Main CV/transcript extraction    |
 | `target_degree_detection_v2.json` | Target degree inference          |
 | `gap_analysis_v2.json`            | Readiness scan against baselines |
+
+Additional versions (for example `*_v1.json`) can coexist in `prompts/` for rollback/A-B testing.
+
+### Active Prompt Version Selection
+
+At runtime, the service resolves prompt files from environment variables:
+
+- `PROFILE_EXTRACTION_PROMPT_VERSION=v2` → `profile_extraction_v2.json`
+- `TARGET_DEGREE_PROMPT_VERSION=v2` → `target_degree_detection_v2.json`
+- `GAP_ANALYSIS_PROMPT_VERSION=v2` → `gap_analysis_v2.json`
+
+Accepted format is `v<number>` (for example `v1`, `v2`, `v3`).
+
+If you change any prompt version variable, restart the service to apply it.
+
+### Prompt Version Auditability
+
+Each LLM call log row stores `prompt_template_version`, so you can trace model behavior back to the exact prompt revision used during extraction, detection, or gap analysis.
 
 ### Prompt Utilities
 
