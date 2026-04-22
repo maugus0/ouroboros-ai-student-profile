@@ -39,6 +39,7 @@ async def test_run_gap_analysis_placeholder_keys_treated_as_not_configured(monke
 async def test_extract_profile_uses_tiered_model_selection_and_truncation(monkeypatch):
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-test-anthropic")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "openai")
 
     calls: list[dict[str, object]] = []
 
@@ -143,6 +144,7 @@ async def test_extract_profile_uses_tiered_model_selection_and_truncation(monkey
 async def test_extract_profile_openai_only_runs_core_and_enrichment(monkeypatch):
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "openai")
 
     calls: list[dict[str, object]] = []
 
@@ -224,6 +226,7 @@ async def test_extract_profile_openai_only_runs_core_and_enrichment(monkeypatch)
 async def test_run_gap_analysis_uses_budgeted_profile_payload(monkeypatch):
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "openai")
 
     captured = {}
 
@@ -263,10 +266,126 @@ async def test_run_gap_analysis_uses_budgeted_profile_payload(monkeypatch):
     assert "[TRUNCATED gap_analysis CONTENT" in captured["user_content"]
 
 
+@pytest.mark.asyncio
+async def test_extract_profile_fails_when_enrichment_payload_is_invalid(monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "openai")
+
+    async def fake_openai(system_prompt, user_content, model=None, max_tokens=None, temperature=None):
+        if "DECISION FRAMEWORK" in system_prompt:
+            return {
+                "content": {
+                    "target_degree_level": "master",
+                    "confidence": 0.9,
+                    "source": "cv_explicit",
+                    "needs_clarification": False,
+                    "reasoning": "Explicit future degree intent found.",
+                },
+                "provider": "openai",
+                "model": model or settings.TARGET_DEGREE_MODEL,
+                "input_tokens": 8,
+                "output_tokens": 4,
+            }
+
+        if "Supplemental Pass" in system_prompt:
+            return {
+                "content": {
+                    "technical_skills": [None],
+                    "languages": [{"language": "English", "level": "native"}],
+                    "certifications": [],
+                    "research_interests": [],
+                    "publications": [],
+                },
+                "provider": "openai",
+                "model": model or settings.OPENAI_MODEL,
+                "input_tokens": 12,
+                "output_tokens": 12,
+            }
+
+        return {
+            "content": {
+                "full_name": "Jane Doe",
+                "email": "jane@example.com",
+                "current_degree_level": "master",
+                "target_degree_level": "phd",
+                "target_degree_confidence": 0.8,
+                "target_degree_source": "trajectory_inference",
+                "target_degree_needs_clarification": False,
+                "target_degree_reasoning": "Master profile with strong research trajectory.",
+                "education": [],
+                "gpa_highest": None,
+                "gpa_scale": None,
+                "work_experience": [],
+                "research_experience": [],
+            },
+            "provider": "openai",
+            "model": model or settings.OPENAI_MODEL,
+            "input_tokens": 20,
+            "output_tokens": 20,
+        }
+
+    monkeypatch.setattr("app.services.llm_service.call_openai", fake_openai)
+
+    service = LLMService()
+    with pytest.raises(LLMExtractionError, match="Enrichment pass failed"):
+        await service.extract_profile("Master student pursuing AI research with publications.")
+
+
 def test_anthropic_placeholder_key_not_treated_as_real(monkeypatch):
     """Placeholder Anthropic keys should not trigger fallback attempts."""
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-ant-your-anthropic-key-here")
     assert LLMService._has_real_anthropic_key() is False
+
+
+def test_provider_selection_prefers_anthropic_when_configured(monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-test-anthropic")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "anthropic")
+
+    service = LLMService()
+    tier = service._select_extraction_tier("short text", None)
+
+    assert tier["provider"] == "anthropic"
+    assert tier["fallback_provider"] == "openai"
+    assert tier["model"] == settings.ANTHROPIC_MODEL
+    assert service._select_gap_analysis_provider("profile text") == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_detect_target_degree_uses_anthropic_when_preferred(monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-test-openai")
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "sk-test-anthropic")
+    monkeypatch.setattr(settings, "LLM_PRIMARY_PROVIDER", "anthropic")
+
+    calls: list[str] = []
+
+    async def fake_openai(*_args, **_kwargs):
+        raise AssertionError("OpenAI should not be called when Anthropic is preferred and configured")
+
+    async def fake_anthropic(system_prompt, user_content, model=None, max_tokens=None):
+        calls.append("anthropic")
+        return {
+            "content": {
+                "target_degree_level": "master",
+                "confidence": 0.9,
+                "source": "cv_explicit",
+                "needs_clarification": False,
+                "reasoning": "Explicit future degree intent found.",
+            },
+            "provider": "anthropic",
+            "model": model or settings.ANTHROPIC_MODEL,
+            "input_tokens": 8,
+            "output_tokens": 4,
+        }
+
+    monkeypatch.setattr("app.services.llm_service.call_openai", fake_openai)
+    monkeypatch.setattr("app.services.llm_service.call_anthropic", fake_anthropic)
+
+    result = await LLMService().detect_target_degree("Student plans to pursue a master's degree.")
+
+    assert result.target_degree_level == "master"
+    assert calls == ["anthropic"]
 
 
 def test_normalize_profile_dict_maps_common_model_variants():
@@ -353,3 +472,54 @@ def test_normalize_profile_dict_maps_research_experience_project_title_to_title(
     assert normalized["research_experience"][1]["title"] == "Ouroboros Student Profile Engine"
     assert "project_title" not in normalized["research_experience"][0]
     assert "project_title" not in normalized["research_experience"][1]
+
+
+def test_normalize_profile_dict_clears_unknown_gpa_placeholders():
+    raw = {
+        "education": [
+            {
+                "institution": "NUS",
+                "degree": "Bachelor of Engineering",
+                "gpa": "unknown",
+                "gpa_scale": "unknown",
+            },
+            {
+                "institution": "NTU",
+                "degree": "Master of Science",
+                "gpa": "N/A",
+                "gpa_scale": "null",
+            },
+        ],
+        "gpa_highest": "unknown",
+        "gpa_scale": "unknown",
+    }
+
+    normalized = LLMService._normalize_profile_dict(raw)
+
+    assert normalized["education"][0]["gpa"] is None
+    assert normalized["education"][0]["gpa_scale"] is None
+    assert normalized["education"][1]["gpa"] is None
+    assert normalized["education"][1]["gpa_scale"] is None
+    assert normalized["gpa_highest"] is None
+    assert normalized["gpa_scale"] is None
+
+
+def test_parse_enrichment_profile_drops_null_language_levels():
+    raw = {
+        "technical_skills": ["Python"],
+        "languages": [
+            {"language": "English", "level": None},
+            {"language": "Bahasa Indonesia", "level": None},
+        ],
+        "certifications": [],
+        "research_interests": [],
+        "publications": [],
+    }
+
+    parsed = LLMService._parse_enrichment_profile(raw)
+    dumped = parsed.model_dump()
+
+    assert dumped["languages"] == [
+        {"language": "English"},
+        {"language": "Bahasa Indonesia"},
+    ]

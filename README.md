@@ -257,49 +257,50 @@ Swagger docs are available at `http://localhost:8001/docs`.
 
 ### Environment Variables
 
-| Variable                            | Required    | Default                    | Description                                             |
-| ----------------------------------- | ----------- | -------------------------- | ------------------------------------------------------- |
-| **Database**                        |             |                            |                                                         |
-| `DB_HOST`                           | No          | `localhost`                | MySQL host                                              |
-| `DB_PORT`                           | No          | `3306`                     | MySQL port                                              |
-| `DB_NAME`                           | No          | `student_profile_db`       | Database name                                           |
-| `DB_USERNAME`                       | No          | `root`                     | MySQL user                                              |
-| `DB_PASSWORD`                       | Yes         | —                          | MySQL password                                          |
-| `DB_POOL_SIZE`                      | No          | `10`                       | Max connections in pool                                 |
-| **Service Auth**                    |             |                            |                                                         |
-| `X_SERVICE_TOKEN`                   | Yes         | —                          | Inter-service auth token (shared with orchestrator)     |
-| **LLM — OpenAI**                    |             |                            |                                                         |
-| `OPENAI_API_KEY`                    | Yes         | —                          | OpenAI API key                                          |
-| `OPENAI_MODEL`                      | No          | `gpt-4o-mini`              | Model identifier                                        |
-| `OPENAI_MAX_TOKENS`                 | No          | `2000`                     | Max output tokens                                       |
-| `OPENAI_TEMPERATURE`                | No          | `0.0`                      | Sampling temperature                                    |
-| **LLM — Anthropic**                 |             |                            |                                                         |
-| `ANTHROPIC_API_KEY`                 | Recommended | —                          | Anthropic API key (fallback)                            |
-| `ANTHROPIC_MODEL`                   | No          | `claude-sonnet-4-20250514` | Model identifier                                        |
-| `ANTHROPIC_MAX_TOKENS`              | No          | `2000`                     | Max output tokens                                       |
-| `LLM_MAX_RETRIES`                   | No          | `3`                        | Max retries per provider call                           |
-| `LLM_RETRY_DELAY`                   | No          | `2`                        | Retry delay (seconds)                                   |
-| `PROFILE_EXTRACTION_PROMPT_VERSION` | No          | `v2`                       | Prompt version for profile extraction (`v1`, `v2`, ...) |
-| `TARGET_DEGREE_PROMPT_VERSION`      | No          | `v2`                       | Prompt version for target-degree detection              |
-| `GAP_ANALYSIS_PROMPT_VERSION`       | No          | `v2`                       | Prompt version for gap-analysis prompt                  |
-| **LLMOps Security**                 |             |                            |                                                         |
-| `ENABLE_SECURITY_CHECKS`            | No          | `true`                     | Master switch for LLMOps input/output safety checks     |
-| `ENABLE_PROMPT_INJECTION_DETECTION` | No          | `true`                     | Detect prompt-injection patterns in user input          |
-| `ENABLE_OUTPUT_VALIDATION`          | No          | `true`                     | Detect leakage/echo patterns in model outputs           |
-| `MAX_INPUT_LENGTH`                  | No          | `10000`                    | Max accepted length before validation rejection         |
-| **Document Processing**             |             |                            |                                                         |
-| `MAX_FILE_SIZE_MB`                  | No          | `10`                       | Max upload size                                         |
-| `ALLOWED_EXTENSIONS`                | No          | `.pdf,.docx`               | Comma-separated                                         |
-| `TEMP_UPLOAD_DIR`                   | No          | `/tmp/uploads`             | Temp file directory                                     |
-| `TESSERACT_PATH`                    | No          | auto-detect                | Tesseract executable path                               |
-| `OCR_LANGUAGE`                      | No          | `eng`                      | Tesseract language code                                 |
-| **Application**                     |             |                            |                                                         |
-| `LOG_LEVEL`                         | No          | `INFO`                     | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL`                 |
-| `USE_MOCK_DATA`                     | No          | `true`                     | Use in-memory repos (tests/dev convenience)             |
-| `ALLOW_DB_FAILURE`                  | No          | `false`                    | Continue if DB unavailable (tests only)                 |
-| **Docker Runtime**                  |             |                            |                                                         |
-| `RUN_STARTUP_SCRIPTS`               | No          | `true`                     | Toggle startup script execution in containers           |
-| `DOCKER_MYSQL_PORT`                 | No          | `3308`                     | Host port mapped to MySQL in docker compose             |
+| Variable                            | Required    | Default                    | Description                                                              |
+| ----------------------------------- | ----------- | -------------------------- | ------------------------------------------------------------------------ |
+| **Database**                        |             |                            |                                                                          |
+| `DB_HOST`                           | No          | `localhost`                | MySQL host                                                               |
+| `DB_PORT`                           | No          | `3306`                     | MySQL port                                                               |
+| `DB_NAME`                           | No          | `student_profile_db`       | Database name                                                            |
+| `DB_USERNAME`                       | No          | `root`                     | MySQL user                                                               |
+| `DB_PASSWORD`                       | Yes         | —                          | MySQL password                                                           |
+| `DB_POOL_SIZE`                      | No          | `10`                       | Max connections in pool                                                  |
+| **Service Auth**                    |             |                            |                                                                          |
+| `X_SERVICE_TOKEN`                   | Yes         | —                          | Inter-service auth token (shared with orchestrator)                      |
+| **LLM — OpenAI**                    |             |                            |                                                                          |
+| `OPENAI_API_KEY`                    | Yes         | —                          | OpenAI API key                                                           |
+| `OPENAI_MODEL`                      | No          | `gpt-4o-mini`              | Model identifier                                                         |
+| `OPENAI_MAX_TOKENS`                 | No          | `2000`                     | Max output tokens                                                        |
+| `OPENAI_TEMPERATURE`                | No          | `0.0`                      | Sampling temperature                                                     |
+| `LLM_PRIMARY_PROVIDER`              | No          | `openai`                   | Primary provider when both keys are configured (`openai` or `anthropic`) |
+| **LLM — Anthropic**                 |             |                            |                                                                          |
+| `ANTHROPIC_API_KEY`                 | Recommended | —                          | Anthropic API key (fallback)                                             |
+| `ANTHROPIC_MODEL`                   | No          | `claude-sonnet-4-20250514` | Model identifier                                                         |
+| `ANTHROPIC_MAX_TOKENS`              | No          | `2000`                     | Max output tokens                                                        |
+| `LLM_MAX_RETRIES`                   | No          | `3`                        | Max retries per provider call                                            |
+| `LLM_RETRY_DELAY`                   | No          | `2`                        | Retry delay (seconds)                                                    |
+| `PROFILE_EXTRACTION_PROMPT_VERSION` | No          | `v2`                       | Prompt version for profile extraction (`v1`, `v2`, ...)                  |
+| `TARGET_DEGREE_PROMPT_VERSION`      | No          | `v2`                       | Prompt version for target-degree detection                               |
+| `GAP_ANALYSIS_PROMPT_VERSION`       | No          | `v2`                       | Prompt version for gap-analysis prompt                                   |
+| **LLMOps Security**                 |             |                            |                                                                          |
+| `ENABLE_SECURITY_CHECKS`            | No          | `true`                     | Master switch for LLMOps input/output safety checks                      |
+| `ENABLE_PROMPT_INJECTION_DETECTION` | No          | `true`                     | Detect prompt-injection patterns in user input                           |
+| `ENABLE_OUTPUT_VALIDATION`          | No          | `true`                     | Detect leakage/echo patterns in model outputs                            |
+| `MAX_INPUT_LENGTH`                  | No          | `10000`                    | Max accepted length before validation rejection                          |
+| **Document Processing**             |             |                            |                                                                          |
+| `MAX_FILE_SIZE_MB`                  | No          | `10`                       | Max upload size                                                          |
+| `ALLOWED_EXTENSIONS`                | No          | `.pdf,.docx`               | Comma-separated                                                          |
+| `TEMP_UPLOAD_DIR`                   | No          | `/tmp/uploads`             | Temp file directory                                                      |
+| `TESSERACT_PATH`                    | No          | auto-detect                | Tesseract executable path                                                |
+| `OCR_LANGUAGE`                      | No          | `eng`                      | Tesseract language code                                                  |
+| **Application**                     |             |                            |                                                                          |
+| `LOG_LEVEL`                         | No          | `INFO`                     | `DEBUG\|INFO\|WARNING\|ERROR\|CRITICAL`                                  |
+| `USE_MOCK_DATA`                     | No          | `true`                     | Use in-memory repos (tests/dev convenience)                              |
+| `ALLOW_DB_FAILURE`                  | No          | `false`                    | Continue if DB unavailable (tests only)                                  |
+| **Docker Runtime**                  |             |                            |                                                                          |
+| `RUN_STARTUP_SCRIPTS`               | No          | `true`                     | Toggle startup script execution in containers                            |
+| `DOCKER_MYSQL_PORT`                 | No          | `3308`                     | Host port mapped to MySQL in docker compose                              |
 
 ### Docker / CI Prefix Compatibility
 

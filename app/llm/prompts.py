@@ -19,6 +19,7 @@ from app.utils.prompt_utils import build_prompt_json, build_prompt_text
 _VALID_FORMATS: frozenset[str] = frozenset({"json", "text"})
 _VALID_PROMPT_TYPES: frozenset[str] = frozenset(
     {
+        "profile_extraction",
         "profile_extraction_core",
         "profile_extraction_enrichment",
         "target_degree_detection",

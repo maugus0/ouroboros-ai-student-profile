@@ -447,9 +447,8 @@ class LLMService:
         }
         system_prompt = get_target_degree_detection_prompt(context=runtime_context, fmt="text")
 
-        provider = (
-            "openai" if self._has_real_openai_key() else ("anthropic" if self._has_real_anthropic_key() else None)
-        )
+        provider_order = self._get_available_providers_in_priority_order()
+        provider = provider_order[0] if provider_order else None
         if provider is None:
             return TargetDegreeDetectionResult()
 
@@ -492,31 +491,53 @@ class LLMService:
         document_text: str,
         detection_result: Optional[TargetDegreeDetectionResult],
     ) -> dict[str, Any]:
-        # Always prioritize OpenAI first
-        if self._has_real_openai_key():
+        provider_order = self._get_available_providers_in_priority_order()
+        if provider_order:
+            primary_provider = provider_order[0]
+            fallback_provider = provider_order[1] if len(provider_order) > 1 else None
             return {
-                "provider": "openai",
-                "fallback_provider": "anthropic" if self._has_real_anthropic_key() else None,
-                "model": settings.OPENAI_MODEL,
-                "max_tokens": settings.OPENAI_MAX_TOKENS,
-            }
-
-        if self._has_real_anthropic_key():
-            return {
-                "provider": "anthropic",
-                "fallback_provider": None,
-                "model": settings.ANTHROPIC_MODEL,
-                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+                "provider": primary_provider,
+                "fallback_provider": fallback_provider,
+                "model": settings.OPENAI_MODEL if primary_provider == "openai" else settings.ANTHROPIC_MODEL,
+                "max_tokens": (
+                    settings.OPENAI_MAX_TOKENS if primary_provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+                ),
             }
 
         return {"provider": None, "fallback_provider": None, "model": None, "max_tokens": None}
 
     def _select_gap_analysis_provider(self, profile_text: str) -> str:
-        # Always prioritize OpenAI first
+        provider_order = self._get_available_providers_in_priority_order()
+        if provider_order:
+            return provider_order[0]
+        return "openai"
+
+    def _get_available_providers_in_priority_order(self) -> list[str]:
+        providers: list[str] = []
         if self._has_real_openai_key():
-            return "openai"
+            providers.append("openai")
         if self._has_real_anthropic_key():
-            return "anthropic"
+            providers.append("anthropic")
+        if len(providers) < 2:
+            return providers
+
+        preferred_provider = self._get_primary_provider_preference()
+        if preferred_provider in providers:
+            providers.remove(preferred_provider)
+            providers.insert(0, preferred_provider)
+        return providers
+
+    @staticmethod
+    def _get_primary_provider_preference() -> str:
+        preference = str(settings.LLM_PRIMARY_PROVIDER or "openai").strip().lower()
+        if preference in {"openai", "anthropic"}:
+            return preference
+
+        logger.warning(
+            "invalid_llm_primary_provider_configuration",
+            configured_value=settings.LLM_PRIMARY_PROVIDER,
+            fallback_provider="openai",
+        )
         return "openai"
 
     @staticmethod
@@ -689,11 +710,23 @@ class LLMService:
                 prompt_template_version=PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
             )
             logger.warning("llm_enrichment_failed", provider=provider, error=str(exc))
-            return EnrichmentExtractedProfile(), {"input_tokens": 0, "output_tokens": 0}
+            raise LLMExtractionError(f"Enrichment pass failed: {exc}") from exc
 
     @classmethod
     def _normalize_profile_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         content = dict(raw or {})
+
+        education = content.get("education")
+        if isinstance(education, list):
+            normalized_education: list[dict[str, Any]] = []
+            for item in education:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                for numeric_field in ("gpa", "gpa_scale"):
+                    row[numeric_field] = cls._normalize_optional_numeric(row.get(numeric_field))
+                normalized_education.append(row)
+            content["education"] = normalized_education
 
         # Work experience: many models use job_title instead of position.
         work = content.get("work_experience")
@@ -772,6 +805,31 @@ class LLMService:
                 normalized_pubs.append(row)
             content["publications"] = normalized_pubs
 
+        # Languages may contain null values from some providers (e.g., level: null).
+        # Keep only non-empty string values so schema validation stays stable.
+        languages = content.get("languages")
+        if isinstance(languages, list):
+            normalized_languages: list[dict[str, str]] = []
+            for item in languages:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        normalized_languages.append({"language": text})
+                    continue
+                if not isinstance(item, dict):
+                    continue
+
+                language_entry: dict[str, str] = {}
+                for key, raw_value in item.items():
+                    if key is None or raw_value is None:
+                        continue
+                    text = str(raw_value).strip()
+                    if text:
+                        language_entry[str(key)] = text
+                if language_entry:
+                    normalized_languages.append(language_entry)
+            content["languages"] = normalized_languages
+
         # Normalize enum-like fields.
         content["current_degree_level"] = cls._normalize_degree_level(content.get("current_degree_level"))
         content["target_degree_level"] = cls._normalize_degree_level(content.get("target_degree_level"))
@@ -779,9 +837,7 @@ class LLMService:
 
         # Some models emit empty strings for optional numeric fields.
         for numeric_field in ("gpa_highest", "gpa_scale"):
-            raw_value = content.get(numeric_field)
-            if isinstance(raw_value, str) and not raw_value.strip():
-                content[numeric_field] = None
+            content[numeric_field] = cls._normalize_optional_numeric(content.get(numeric_field))
 
         # Normalize list-like fields that models sometimes emit as null.
         list_fields = [
@@ -805,6 +861,20 @@ class LLMService:
         content["evidence_map"] = cls._normalize_evidence_map(content.get("evidence_map"))
 
         return content
+
+    @staticmethod
+    def _normalize_optional_numeric(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        if not normalized:
+            return None
+
+        if normalized.lower() in {"unknown", "n/a", "na", "none", "null", "not available"}:
+            return None
+
+        return value
 
     @staticmethod
     def _normalize_degree_level(value: Any) -> DegreeLevelEnum:

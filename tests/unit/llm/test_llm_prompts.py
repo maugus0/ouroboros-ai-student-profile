@@ -7,6 +7,8 @@ import pytest
 from app.llm.prompts import (
     get_gap_analysis_prompt,
     get_profile_extraction_core_prompt,
+    get_profile_extraction_prompt,
+    get_prompt_template_version,
     get_target_degree_detection_prompt,
 )
 
@@ -17,6 +19,16 @@ def test_profile_extraction_prompt_json_format():
 
     assert "agent_identity" in parsed
     assert "scope" in parsed
+    assert "output_format" in parsed
+
+
+def test_full_profile_extraction_prompt_version_and_template():
+    assert get_prompt_template_version("profile_extraction") == "profile_extraction_v2"
+
+    prompt = get_profile_extraction_prompt(fmt="json")
+    parsed = json.loads(prompt)
+
+    assert "agent_identity" in parsed
     assert "output_format" in parsed
 
 

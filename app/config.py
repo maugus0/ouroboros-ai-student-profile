@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_MAX_TOKENS: int = 2000
     OPENAI_TEMPERATURE: float = 0.0
+    LLM_PRIMARY_PROVIDER: str = "openai"
 
     TARGET_DEGREE_MODEL: str = "gpt-4o-mini"
     TARGET_DEGREE_MAX_TOKENS: int = 400
