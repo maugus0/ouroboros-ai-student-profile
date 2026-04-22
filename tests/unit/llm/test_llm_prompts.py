@@ -6,30 +6,31 @@ import pytest
 
 from app.llm.prompts import (
     get_gap_analysis_prompt,
-    get_profile_extraction_prompt,
+    get_profile_extraction_core_prompt,
     get_target_degree_detection_prompt,
 )
 
 
 def test_profile_extraction_prompt_json_format():
-    prompt = get_profile_extraction_prompt(fmt="json")
+    prompt = get_profile_extraction_core_prompt(fmt="json")
     parsed = json.loads(prompt)
 
     assert "agent_identity" in parsed
-    assert "extraction_rules" in parsed
+    assert "scope" in parsed
+    assert "output_format" in parsed
 
 
 def test_profile_extraction_prompt_text_format():
-    prompt = get_profile_extraction_prompt(fmt="text")
+    prompt = get_profile_extraction_core_prompt(fmt="text")
 
     assert "AGENT IDENTITY" in prompt
-    assert "EXTRACTION RULES" in prompt
+    assert "SCOPE" in prompt
     assert len(prompt) > 100
 
 
 def test_profile_extraction_with_context():
     context = {"user_provided_target_degree": "phd"}
-    prompt = get_profile_extraction_prompt(context=context, fmt="json")
+    prompt = get_profile_extraction_core_prompt(context=context, fmt="json")
 
     parsed = json.loads(prompt)
     assert "runtime_context" in parsed
@@ -67,4 +68,4 @@ def test_gap_analysis_with_context():
 )
 def test_invalid_prompt_format_raises(bad_fmt):
     with pytest.raises(ValueError, match="Unsupported prompt format"):
-        get_profile_extraction_prompt(fmt=bad_fmt)
+        get_profile_extraction_core_prompt(fmt=bad_fmt)

@@ -49,7 +49,6 @@ async def parse_document(
         file_content_base64=body.file_content_base64,
         intent=body.intent,
         document_type=body.document_type,
-        target_degree_hint=body.target_degree_hint,
         run_gap_analysis=body.run_gap_analysis,
     )
     return StandardResponse(message="Profile created", data=result)
@@ -101,7 +100,6 @@ async def parse_document_upload(
     user_id: str | None = Form(default=None),
     intent: str = Form(default="profile_completion"),
     document_type: str = Form(default="cv"),
-    target_degree_hint: str | None = Form(default=None),
     run_gap_analysis: bool = Form(default=False),
     file: UploadFile = File(...),
     request_user_id: str | None = Depends(get_optional_request_user_id),
@@ -132,7 +130,6 @@ async def parse_document_upload(
         file_content_base64=file_content_base64,
         intent=intent,
         document_type=document_type,
-        target_degree_hint=target_degree_hint,
         run_gap_analysis=run_gap_analysis,
     )
     return StandardResponse(message="Profile created", data=result)

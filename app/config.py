@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     TARGET_DEGREE_MAX_TOKENS: int = 400
 
     PROFILE_EXTRACTION_PROMPT_VERSION: str = "v2"
+    PROFILE_EXTRACTION_CORE_PROMPT_VERSION: str = "v1"
+    PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION: str = "v1"
     TARGET_DEGREE_PROMPT_VERSION: str = "v2"
     GAP_ANALYSIS_PROMPT_VERSION: str = "v2"
 
@@ -57,7 +59,7 @@ class Settings(BaseSettings):
     LLM_TRUNCATION_TAIL_CHARS: int = 1500
 
     ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5"
     ANTHROPIC_MAX_TOKENS: int = 2000
 
     LLM_MAX_RETRIES: int = 3

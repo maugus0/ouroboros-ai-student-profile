@@ -420,8 +420,7 @@ curl -X POST http://localhost:8001/api/v1/profiles/parse \
   -d '{
     "document_type": "cv",
     "file_name": "cv.pdf",
-    "file_content_base64": "JVBERi0xLjQK...",
-    "target_degree_hint": "master"
+    "file_content_base64": "JVBERi0xLjQK..."
   }'
 ```
 
@@ -454,7 +453,6 @@ Use this when you want to upload a file directly instead of sending base64 conte
 curl -X POST http://localhost:8001/api/v1/profiles/parse-upload \
   -H "X-Service-Token: your-service-token" \
   -F "document_type=cv" \
-  -F "target_degree_hint=master" \
   -F "file=@/absolute/path/to/cv.pdf"
 ```
 

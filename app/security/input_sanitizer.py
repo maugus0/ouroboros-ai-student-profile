@@ -12,21 +12,31 @@ from app.utils.exceptions import PromptInjectionError, ValidationError
 logger = get_logger(__name__)
 
 # Instruction-like substrings commonly used in jailbreaks (case-insensitive match).
+#
+# Design notes:
+# - ChatML / Llama tokens (<|...|>, [INST]) are safe: never appear in real academic text.
+# - Markdown role headers (###) use a negative lookahead so "### System Design" or
+#   "### User Interface" don't match, but "### SYSTEM" (standalone) does.
+# - Classic jailbreak phrases require the full multi-word form so that "instruction sets",
+#   "system architecture", or "system design" in a CS CV do not trigger.
+# - HTML <script> tags still require the literal '<', so "bash script" / "Python script"
+#   are unaffected.
 CONTROL_PATTERNS = [
     r"<\|.*?\|>",
     r"<\|im_start\|>",
     r"<\|im_end\|>",
     r"\[\s*INST\s*\]",
-    r"###\s*SYSTEM",
-    r"###\s*ASSISTANT",
-    r"###\s*USER",
-    r"###\s*IGNORE",
+    r"###\s*SYSTEM(?!\s+\w)",
+    r"###\s*ASSISTANT(?!\s+\w)",
+    r"###\s*USER(?!\s+\w)",
+    r"###\s*IGNORE(?!\s+\w)",
     r"IGNORE\s+(PREVIOUS|ALL)\s+INSTRUCTIONS",
     r"DISREGARD\s+(PREVIOUS|ALL)\s+INSTRUCTIONS",
-    r"OVERRIDE\s+SYSTEM",
+    r"OVERRIDE\s+SYSTEM\s+(?:INSTRUCTIONS?|PROMPT)",
     r"NEW\s+INSTRUCTIONS?\s*:",
     r"BEGIN\s+SYSTEM\s+PROMPT",
     r"END\s+SYSTEM\s+PROMPT",
+    # HTML script injection — '<' is required, so "bash script" / "shell script" won't match.
     r"<\s*script",
     r"</\s*script\s*>",
 ]

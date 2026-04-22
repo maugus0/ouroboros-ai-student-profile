@@ -10,8 +10,6 @@ from pathlib import Path
 from typing import Any
 
 from app.core.logging import get_logger
-from app.security.prompt_guardrails import build_safe_prompt as _build_safe_prompt
-from app.security.prompt_guardrails import wrap_user_data as _wrap_user_data
 
 logger = get_logger(__name__)
 
@@ -100,28 +98,6 @@ def build_prompt_text(
         lines.append("")
 
     return "\n".join(lines)
-
-
-# ------------------------------------------------------------------
-# Guardrails utilities (prevent prompt injection)
-# ------------------------------------------------------------------
-
-
-def wrap_user_data(user_data: dict[str, Any], label: str = "USER_DATA") -> str:
-    """Wrap user data using the canonical prompt guardrails implementation."""
-    return _wrap_user_data(user_data, label)
-
-
-def build_safe_prompt(
-    system_instructions: str,
-    user_data: dict[str, Any],
-    task_description: str,
-) -> str:
-    """Build a safe prompt using the canonical prompt guardrails implementation."""
-    return _build_safe_prompt(system_instructions, user_data, task_description)
-
-
-# ------------------------------------------------------------------
 
 
 def _clean_context(context: dict[str, Any]) -> dict[str, Any]:

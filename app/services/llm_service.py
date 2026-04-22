@@ -1,5 +1,7 @@
 """LLM service with primary/fallback provider and structured extraction."""
 
+# pylint: disable=C0302
+
 import copy
 import json
 import re
@@ -13,15 +15,23 @@ from app.llm.anthropic_client import call_anthropic
 from app.llm.openai_client import call_openai
 from app.llm.prompts import (
     get_gap_analysis_prompt,
-    get_profile_extraction_prompt,
+    get_profile_extraction_core_prompt,
+    get_profile_extraction_enrichment_prompt,
     get_prompt_template_version,
     get_target_degree_detection_prompt,
 )
-from app.llm.schemas import DegreeLevelEnum, ExtractedProfile, TargetDegreeDetectionResult
+from app.llm.schemas import (
+    CoreExtractedProfile,
+    DegreeLevelEnum,
+    EnrichmentExtractedProfile,
+    ExtractedProfile,
+    TargetDegreeDetectionResult,
+)
 from app.models.llm_models import LLMExtractionResult
 from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
 from app.security.input_sanitizer import detect_injection_attempt, strip_control_characters
 from app.security.output_validator import validate_output_for_leakage, validate_profile_data
+from app.security.prompt_guardrails import wrap_user_data
 from app.utils.exceptions import LLMExtractionError, PromptInjectionError
 from app.utils.trace_id import get_bound_trace_id
 
@@ -43,6 +53,8 @@ def _resolve_prompt_template_version(prompt_name: str) -> str:
 
 
 PROFILE_EXTRACTION_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction")
+PROFILE_EXTRACTION_CORE_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction_core")
+PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction_enrichment")
 GAP_ANALYSIS_PROMPT_VERSION = _resolve_prompt_template_version("gap_analysis")
 TARGET_DEGREE_PROMPT_VERSION = _resolve_prompt_template_version("target_degree_detection")
 
@@ -53,9 +65,7 @@ class LLMService:
     def __init__(self, llm_log_repo: LLMCallLogRepository | None = None):
         self.llm_log_repo = llm_log_repo or LLMCallLogRepository()
 
-    async def extract_profile(
-        self, document_text: str, target_degree_hint: Optional[str] = None
-    ) -> LLMExtractionResult:
+    async def extract_profile(self, document_text: str) -> LLMExtractionResult:
         """Extract structured profile data from document text using LLM.
 
         Uses a cheap target-degree classifier first when no hint is provided,
@@ -75,18 +85,9 @@ class LLMService:
             # Sanitize control characters
             document_text = strip_control_characters(document_text, preserve_newline_tab=True)
 
-        if target_degree_hint and settings.ENABLE_SECURITY_CHECKS:
-            if detect_injection_attempt(target_degree_hint):
-                raise PromptInjectionError("Potential prompt injection detected in target degree hint")
-            target_degree_hint = strip_control_characters(target_degree_hint, preserve_newline_tab=False)
+        detection_result = await self.detect_target_degree(document_text)
 
-        detection_result: Optional[TargetDegreeDetectionResult] = None
-        if not target_degree_hint:
-            detection_result = await self.detect_target_degree(document_text)
-            if self._is_confident_target_detection(detection_result):
-                target_degree_hint = str(detection_result.target_degree_level or "unknown")
-
-        extraction_tier = self._select_extraction_tier(document_text, target_degree_hint, detection_result)
+        extraction_tier = self._select_extraction_tier(document_text, detection_result)
         if extraction_tier["provider"] is None:
             raise LLMExtractionError("No LLM API key configured for extraction")
 
@@ -100,7 +101,6 @@ class LLMService:
         runtime_context: dict[str, Any] = {
             "document_metadata": {
                 "text_length": len(document_text),
-                "has_target_hint": target_degree_hint is not None,
                 "budgeted_text_length": len(budgeted_text),
             },
             "llm_budget": input_meta,
@@ -109,12 +109,9 @@ class LLMService:
                 "extraction_tier": extraction_tier,
             },
         }
-        if target_degree_hint:
-            runtime_context["user_provided_target_degree"] = target_degree_hint
 
-        system_prompt = get_profile_extraction_prompt(context=runtime_context, fmt="text")
-        user_content, _ = self._build_extraction_input(budgeted_text, target_degree_hint)
-
+        system_prompt = get_profile_extraction_core_prompt(context=runtime_context, fmt="text")
+        user_content, _ = self._build_extraction_input(budgeted_text)
         start = time.perf_counter()
         fallback_reason: Optional[str] = None
 
@@ -131,7 +128,13 @@ class LLMService:
                 model=primary_model,
                 max_tokens=primary_max_tokens,
             )
-            profile = self._parse_profile(result["content"])
+            core_profile = self._parse_core_profile(result["content"])
+            enrichment_profile, enrichment_meta = await self._run_enrichment_pass(
+                provider=result["provider"],
+                budgeted_text=budgeted_text,
+                runtime_context=runtime_context,
+            )
+            profile = self._parse_profile(self._merge_profile_parts(core_profile, enrichment_profile))
             latency = int((time.perf_counter() - start) * 1000)
 
             # Security: Validate output for leakage and prompt echoing
@@ -179,7 +182,7 @@ class LLMService:
                     )
 
             await self._log_llm_call(
-                operation="profile_extraction",
+                operation="profile_extraction_core",
                 provider=result["provider"],
                 model=result["model"],
                 input_tokens=result.get("input_tokens"),
@@ -187,27 +190,27 @@ class LLMService:
                 latency_ms=latency,
                 success=True,
                 retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
-                prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
             )
             return LLMExtractionResult(
                 profile_data=profile.model_dump(),
                 provider=result["provider"],
                 model=result["model"],
-                input_tokens=result["input_tokens"],
-                output_tokens=result["output_tokens"],
+                input_tokens=(result.get("input_tokens") or 0) + enrichment_meta["input_tokens"],
+                output_tokens=(result.get("output_tokens") or 0) + enrichment_meta["output_tokens"],
                 latency_ms=latency,
                 fallback_used=False,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             await self._log_llm_call(
-                operation="profile_extraction",
+                operation="profile_extraction_core",
                 provider=primary_provider,
                 model=primary_model,
                 latency_ms=int((time.perf_counter() - start) * 1000),
                 success=False,
                 error_message=str(exc),
                 retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
-                prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
             )
             logger.warning("llm_extraction_failed", provider=primary_provider, error=str(exc))
             fallback_reason = f"{primary_provider} failed: {exc}"
@@ -225,10 +228,16 @@ class LLMService:
                     model=secondary_model,
                     max_tokens=secondary_max_tokens,
                 )
-                profile = self._parse_profile(result["content"])
+                core_profile = self._parse_core_profile(result["content"])
+                enrichment_profile, enrichment_meta = await self._run_enrichment_pass(
+                    provider=result["provider"],
+                    budgeted_text=budgeted_text,
+                    runtime_context=runtime_context,
+                )
+                profile = self._parse_profile(self._merge_profile_parts(core_profile, enrichment_profile))
                 latency = int((time.perf_counter() - start) * 1000)
                 await self._log_llm_call(
-                    operation="profile_extraction",
+                    operation="profile_extraction_core",
                     provider=result["provider"],
                     model=result["model"],
                     input_tokens=result.get("input_tokens"),
@@ -238,14 +247,14 @@ class LLMService:
                     retry_count=self._get_retry_count(
                         call_openai if secondary_provider == "openai" else call_anthropic
                     ),
-                    prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                    prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
                 )
                 return LLMExtractionResult(
                     profile_data=profile.model_dump(),
                     provider=result["provider"],
                     model=result["model"],
-                    input_tokens=result["input_tokens"],
-                    output_tokens=result["output_tokens"],
+                    input_tokens=(result.get("input_tokens") or 0) + enrichment_meta["input_tokens"],
+                    output_tokens=(result.get("output_tokens") or 0) + enrichment_meta["output_tokens"],
                     latency_ms=latency,
                     fallback_used=True,
                     fallback_reason=fallback_reason,
@@ -319,7 +328,9 @@ class LLMService:
             "llm_budget": input_meta,
         }
         system_prompt = get_gap_analysis_prompt(context=runtime_context, fmt="text")
-        user_content = f"TARGET DEGREE: {target_degree}\n\nSTUDENT PROFILE:\n{budgeted_profile_text}"
+        user_content = f"TARGET DEGREE: {target_degree}\n\n" + wrap_user_data(
+            {"profile_data": budgeted_profile_text}, label="STUDENT_PROFILE"
+        )
 
         primary_provider = self._select_gap_analysis_provider(profile_text)
         fallback_provider = "anthropic" if primary_provider == "openai" else "openai"
@@ -406,12 +417,14 @@ class LLMService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_extraction_input(text: str, target_degree_hint: Optional[str] = None) -> tuple[str, dict[str, Any]]:
-        parts = []
-        if target_degree_hint:
-            parts.append(f"USER-PROVIDED TARGET DEGREE: {target_degree_hint}")
-        parts.append(f"DOCUMENT TEXT:\n{text}")
-        return "\n\n".join(parts), {"text_length": len(text), "truncated": "[TRUNCATED" in text}
+    def _build_extraction_input(text: str) -> tuple[str, dict[str, Any]]:
+        user_content = wrap_user_data({"document_text": text}, label="DOCUMENT")
+        return user_content, {"text_length": len(text), "truncated": "[TRUNCATED" in text}
+
+    @staticmethod
+    def _build_enrichment_input(text: str) -> tuple[str, dict[str, Any]]:
+        user_content = wrap_user_data({"document_text": text}, label="DOCUMENT")
+        return user_content, {"text_length": len(text), "truncated": "[TRUNCATED" in text}
 
     async def detect_target_degree(self, document_text: str) -> TargetDegreeDetectionResult:
         """Run a cheap first-pass classifier for target degree intent."""
@@ -477,21 +490,9 @@ class LLMService:
     def _select_extraction_tier(
         self,
         document_text: str,
-        target_degree_hint: Optional[str],
         detection_result: Optional[TargetDegreeDetectionResult],
     ) -> dict[str, Any]:
-        ambiguous = bool(detection_result and not self._is_confident_target_detection(detection_result))
-        long_document = len(document_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD
-        use_strong_model = ambiguous or long_document
-
-        if use_strong_model and self._has_real_anthropic_key():
-            return {
-                "provider": "anthropic",
-                "fallback_provider": "openai" if self._has_real_openai_key() else None,
-                "model": settings.ANTHROPIC_MODEL,
-                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
-            }
-
+        # Always prioritize OpenAI first
         if self._has_real_openai_key():
             return {
                 "provider": "openai",
@@ -511,8 +512,7 @@ class LLMService:
         return {"provider": None, "fallback_provider": None, "model": None, "max_tokens": None}
 
     def _select_gap_analysis_provider(self, profile_text: str) -> str:
-        if len(profile_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD and self._has_real_anthropic_key():
-            return "anthropic"
+        # Always prioritize OpenAI first
         if self._has_real_openai_key():
             return "openai"
         if self._has_real_anthropic_key():
@@ -619,6 +619,79 @@ class LLMService:
         return ExtractedProfile(**normalized)
 
     @classmethod
+    def _parse_core_profile(cls, raw_content: dict[str, Any]) -> CoreExtractedProfile:
+        """Normalize provider output for the small first-pass schema."""
+        normalized = cls._normalize_profile_dict(raw_content)
+        return CoreExtractedProfile(**normalized)
+
+    @classmethod
+    def _parse_enrichment_profile(cls, raw_content: dict[str, Any]) -> EnrichmentExtractedProfile:
+        """Normalize provider output for the supplemental second-pass schema."""
+        normalized = cls._normalize_profile_dict(raw_content)
+        return EnrichmentExtractedProfile(**normalized)
+
+    @staticmethod
+    def _merge_profile_parts(
+        core_profile: CoreExtractedProfile,
+        enrichment_profile: EnrichmentExtractedProfile,
+    ) -> dict[str, Any]:
+        merged = core_profile.model_dump()
+        merged.update(enrichment_profile.model_dump())
+        return merged
+
+    async def _run_enrichment_pass(
+        self,
+        *,
+        provider: str,
+        budgeted_text: str,
+        runtime_context: dict[str, Any],
+    ) -> tuple[EnrichmentExtractedProfile, dict[str, int]]:
+        """Run a best-effort second pass for bulky supplemental fields."""
+        enrichment_prompt = get_profile_extraction_enrichment_prompt(context=runtime_context, fmt="text")
+        enrichment_content, _ = self._build_enrichment_input(budgeted_text)
+        model = settings.OPENAI_MODEL if provider == "openai" else settings.ANTHROPIC_MODEL
+        max_tokens = settings.OPENAI_MAX_TOKENS if provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+        start = time.perf_counter()
+
+        try:
+            result = await self._call_provider(
+                provider,
+                enrichment_prompt,
+                enrichment_content,
+                model=model,
+                max_tokens=max_tokens,
+            )
+            enrichment_profile = self._parse_enrichment_profile(result["content"])
+            await self._log_llm_call(
+                operation="profile_extraction_enrichment",
+                provider=result["provider"],
+                model=result["model"],
+                input_tokens=result.get("input_tokens"),
+                output_tokens=result.get("output_tokens"),
+                latency_ms=int((time.perf_counter() - start) * 1000),
+                success=True,
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
+            )
+            return enrichment_profile, {
+                "input_tokens": result.get("input_tokens") or 0,
+                "output_tokens": result.get("output_tokens") or 0,
+            }
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await self._log_llm_call(
+                operation="profile_extraction_enrichment",
+                provider=provider,
+                model=model,
+                latency_ms=int((time.perf_counter() - start) * 1000),
+                success=False,
+                error_message=str(exc),
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
+            )
+            logger.warning("llm_enrichment_failed", provider=provider, error=str(exc))
+            return EnrichmentExtractedProfile(), {"input_tokens": 0, "output_tokens": 0}
+
+    @classmethod
     def _normalize_profile_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         content = dict(raw or {})
 
@@ -636,6 +709,21 @@ class LLMService:
                 if row.get("company") and row.get("position"):
                     normalized_work.append(row)
             content["work_experience"] = normalized_work
+
+        # Research experience: many models use project_title instead of title.
+        research = content.get("research_experience")
+        if isinstance(research, list):
+            normalized_research: list[dict[str, Any]] = []
+            for item in research:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                if not row.get("title") and row.get("project_title"):
+                    row["title"] = row.get("project_title")
+                row.pop("project_title", None)
+                if row.get("title"):
+                    normalized_research.append(row)
+            content["research_experience"] = normalized_research
 
         # Certifications may arrive as objects; flatten to strings for schema compatibility.
         certs = content.get("certifications")
@@ -685,8 +773,15 @@ class LLMService:
             content["publications"] = normalized_pubs
 
         # Normalize enum-like fields.
+        content["current_degree_level"] = cls._normalize_degree_level(content.get("current_degree_level"))
         content["target_degree_level"] = cls._normalize_degree_level(content.get("target_degree_level"))
         content["target_degree_source"] = cls._normalize_degree_source(content.get("target_degree_source"))
+
+        # Some models emit empty strings for optional numeric fields.
+        for numeric_field in ("gpa_highest", "gpa_scale"):
+            raw_value = content.get(numeric_field)
+            if isinstance(raw_value, str) and not raw_value.strip():
+                content[numeric_field] = None
 
         # Normalize list-like fields that models sometimes emit as null.
         list_fields = [
@@ -842,6 +937,7 @@ class LLMService:
 
         # Check education years
         current_year = datetime.now().year
+        earliest_plausible_birth_year = current_year - 65  # generous upper-age bound
         education = profile_data.get("education") or []
         for idx, edu in enumerate(education):
             if not isinstance(edu, dict):
@@ -853,11 +949,13 @@ class LLMService:
             try:
                 if start_year:
                     sy = int(start_year)
-                    if sy < 1950 or sy > current_year:
+                    if sy < earliest_plausible_birth_year:
+                        issues.append(f"Education[{idx}] start_year implausible: {sy} (implies applicant age > 65)")
+                    elif sy > current_year:
                         issues.append(f"Education[{idx}] start_year implausible: {sy}")
                 if end_year:
                     ey = int(end_year)
-                    if ey < 1950 or ey > current_year + 10:
+                    if ey < earliest_plausible_birth_year or ey > current_year + 10:
                         issues.append(f"Education[{idx}] end_year implausible: {ey}")
                 if start_year and end_year:
                     sy, ey = int(start_year), int(end_year)
@@ -878,11 +976,13 @@ class LLMService:
             try:
                 if start_year:
                     sy = int(start_year)
-                    if sy < 1950 or sy > current_year:
+                    if sy < earliest_plausible_birth_year:
+                        issues.append(f"WorkExp[{idx}] start_year implausible: {sy} (implies applicant age > 65)")
+                    elif sy > current_year:
                         issues.append(f"WorkExp[{idx}] start_year implausible: {sy}")
                 if end_year:
                     ey = int(end_year)
-                    if ey < 1950 or ey > current_year + 5:
+                    if ey < earliest_plausible_birth_year or ey > current_year + 5:
                         issues.append(f"WorkExp[{idx}] end_year implausible: {ey}")
                 if start_year and end_year:
                     sy, ey = int(start_year), int(end_year)

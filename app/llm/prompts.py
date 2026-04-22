@@ -17,7 +17,14 @@ from app.config import settings
 from app.utils.prompt_utils import build_prompt_json, build_prompt_text
 
 _VALID_FORMATS: frozenset[str] = frozenset({"json", "text"})
-_VALID_PROMPT_TYPES: frozenset[str] = frozenset({"profile_extraction", "target_degree_detection", "gap_analysis"})
+_VALID_PROMPT_TYPES: frozenset[str] = frozenset(
+    {
+        "profile_extraction_core",
+        "profile_extraction_enrichment",
+        "target_degree_detection",
+        "gap_analysis",
+    }
+)
 
 
 def _require_prompt_type(prompt_type: str) -> None:
@@ -40,6 +47,8 @@ def _get_configured_version(prompt_type: str) -> str:
     _require_prompt_type(prompt_type)
     configured_by_type = {
         "profile_extraction": settings.PROFILE_EXTRACTION_PROMPT_VERSION,
+        "profile_extraction_core": settings.PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
+        "profile_extraction_enrichment": settings.PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
         "target_degree_detection": settings.TARGET_DEGREE_PROMPT_VERSION,
         "gap_analysis": settings.GAP_ANALYSIS_PROMPT_VERSION,
     }
@@ -81,6 +90,22 @@ def get_profile_extraction_prompt(
         fmt: ``"json"`` (machine-oriented) or ``"text"`` (plain-text sections for the LLM).
     """
     return _build_prompt("profile_extraction", context, fmt)
+
+
+def get_profile_extraction_core_prompt(
+    context: dict[str, Any] | None = None,
+    fmt: str = "json",
+) -> str:
+    """Build the smaller first-pass profile-extraction system prompt."""
+    return _build_prompt("profile_extraction_core", context, fmt)
+
+
+def get_profile_extraction_enrichment_prompt(
+    context: dict[str, Any] | None = None,
+    fmt: str = "json",
+) -> str:
+    """Build the supplemental second-pass profile-enrichment system prompt."""
+    return _build_prompt("profile_extraction_enrichment", context, fmt)
 
 
 def get_target_degree_detection_prompt(
