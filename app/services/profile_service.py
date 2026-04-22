@@ -612,6 +612,7 @@ class ProfileService:
         if not row:
             return {
                 "user_id": user_id,
+                "profile_id": None,
                 "completed": False,
                 "missing_fields": default_missing,
                 "optional_missing_fields": default_optional_missing,

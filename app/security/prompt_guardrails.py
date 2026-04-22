@@ -3,10 +3,6 @@
 import json
 from typing import Any
 
-from app.core.logging import get_logger
-
-logger = get_logger(__name__)
-
 
 def wrap_user_data(user_data: dict[str, Any], label: str = "USER_DATA") -> str:
     """Wrap user data in a clearly marked DATA section.

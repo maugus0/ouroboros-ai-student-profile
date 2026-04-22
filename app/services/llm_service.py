@@ -1,5 +1,6 @@
 """LLM service with primary/fallback provider and structured extraction."""
 
+import copy
 import json
 import re
 import time
@@ -21,13 +22,29 @@ from app.models.llm_models import LLMExtractionResult
 from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
 from app.security.input_sanitizer import detect_injection_attempt, strip_control_characters
 from app.security.output_validator import validate_output_for_leakage, validate_profile_data
-from app.utils.exceptions import LLMExtractionError
+from app.utils.exceptions import LLMExtractionError, PromptInjectionError
 from app.utils.trace_id import get_bound_trace_id
 
 logger = get_logger(__name__)
-PROFILE_EXTRACTION_PROMPT_VERSION = get_prompt_template_version("profile_extraction")
-GAP_ANALYSIS_PROMPT_VERSION = get_prompt_template_version("gap_analysis")
-TARGET_DEGREE_PROMPT_VERSION = get_prompt_template_version("target_degree_detection")
+
+
+def _resolve_prompt_template_version(prompt_name: str) -> str:
+    """Resolve a prompt template version without breaking module import."""
+    try:
+        return get_prompt_template_version(prompt_name)
+    except ValueError as exc:
+        logger.error(
+            "invalid_prompt_template_version_configuration",
+            prompt_name=prompt_name,
+            error=str(exc),
+            fallback_version="v1",
+        )
+        return "v1"
+
+
+PROFILE_EXTRACTION_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction")
+GAP_ANALYSIS_PROMPT_VERSION = _resolve_prompt_template_version("gap_analysis")
+TARGET_DEGREE_PROMPT_VERSION = _resolve_prompt_template_version("target_degree_detection")
 
 
 class LLMService:
@@ -53,14 +70,14 @@ class LLMService:
                     operation="profile_extraction",
                     trace_id=get_bound_trace_id(),
                 )
-                raise LLMExtractionError("Potential prompt injection detected in document text")
+                raise PromptInjectionError("Potential prompt injection detected in document text")
 
             # Sanitize control characters
             document_text = strip_control_characters(document_text, preserve_newline_tab=True)
 
         if target_degree_hint and settings.ENABLE_SECURITY_CHECKS:
             if detect_injection_attempt(target_degree_hint):
-                raise LLMExtractionError("Potential prompt injection detected in target degree hint")
+                raise PromptInjectionError("Potential prompt injection detected in target degree hint")
             target_degree_hint = strip_control_characters(target_degree_hint, preserve_newline_tab=False)
 
         detection_result: Optional[TargetDegreeDetectionResult] = None
@@ -263,7 +280,7 @@ class LLMService:
         # Security: Sanitize target degree input
         if settings.ENABLE_SECURITY_CHECKS:
             if detect_injection_attempt(target_degree):
-                raise LLMExtractionError("Potential prompt injection detected in target degree")
+                raise PromptInjectionError("Potential prompt injection detected in target degree")
             target_degree = strip_control_characters(target_degree, preserve_newline_tab=False)
 
         # Profile data security: Validate before gap analysis
@@ -902,7 +919,7 @@ class LLMService:
         Removes control characters from text fields to prevent injection.
         Returns a copy of the profile with sanitized content.
         """
-        sanitized = json.loads(json.dumps(profile_data))  # Deep copy
+        sanitized = copy.deepcopy(profile_data)
 
         # Sanitize string fields in education
         education = sanitized.get("education") or []

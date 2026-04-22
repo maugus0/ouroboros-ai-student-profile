@@ -1,5 +1,6 @@
 """Input sanitization to prevent prompt injection and malicious content."""
 
+import hashlib
 import re
 import unicodedata
 from typing import Any
@@ -101,7 +102,8 @@ def sanitize_text(text: str, field_name: str = "input") -> str:
                     "potential_prompt_injection_detected",
                     field=field_name,
                     pattern=pattern,
-                    text_sample=text[:200],
+                    text_length=len(text),
+                    text_hash=hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
                 )
                 raise PromptInjectionError(
                     f"{field_name} contains suspicious patterns that may attempt prompt injection"

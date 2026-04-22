@@ -1,5 +1,6 @@
 """Validate LLM outputs for quality, safety, and data integrity in student profiles."""
 
+import hashlib
 import json
 import re
 from typing import Any
@@ -7,6 +8,15 @@ from typing import Any
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+def _content_metadata(text: str) -> dict[str, Any]:
+    """Return non-sensitive content metadata for logging."""
+    return {
+        "content_length": len(text),
+        "content_hash": hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest(),
+    }
+
 
 # Hallucination indicators: suspicious claims unlikely in student data.
 HALLUCINATION_INDICATORS = [
@@ -113,16 +123,17 @@ def validate_profile_data(
 
     # Check for hallucination indicators
     profile_str = json.dumps(profile_dict).lower()
+    profile_meta = _content_metadata(profile_str)
     for indicator in HALLUCINATION_INDICATORS:
         if indicator.lower() in profile_str:
             issues.append(f"Potential hallucination detected: '{indicator}'")
-            logger.warning("hallucination_detected", indicator=indicator, profile_sample=profile_str[:200])
+            logger.warning("hallucination_detected", indicator=indicator, **profile_meta)
 
     # Check for incomplete extraction patterns
     for regex in INCOMPLETE_EXTRACTION_REGEXES:
         if regex.search(profile_str):
             issues.append(f"Incomplete extraction detected: {regex.pattern}")
-            logger.warning("incomplete_extraction", pattern=regex.pattern, profile_sample=profile_str[:200])
+            logger.warning("incomplete_extraction", pattern=regex.pattern, **profile_meta)
 
     # Validate key fields are present and non-empty
     required_fields = ["target_degree_level", "education"]
@@ -156,16 +167,18 @@ def validate_output_for_leakage(content: str) -> list[str]:
     if not content:
         return issues
 
+    content_meta = _content_metadata(content)
+
     # Check for prompt leakage patterns
     for pattern in PROMPT_LEAKAGE_PATTERNS:
         if re.search(pattern, content, re.IGNORECASE):
             issues.append(f"Prompt leakage detected: {pattern}")
-            logger.warning("prompt_leakage_in_output", pattern=pattern, content_sample=content[:200])
+            logger.warning("prompt_leakage_in_output", pattern=pattern, **content_meta)
 
     # Check for injection echo patterns
     for pattern in OUTPUT_INJECTION_PATTERNS:
         if re.search(pattern, content, re.IGNORECASE):
             issues.append(f"Injection pattern echoed: {pattern}")
-            logger.warning("output_injection_pattern", pattern=pattern, content_sample=content[:200])
+            logger.warning("output_injection_pattern", pattern=pattern, **content_meta)
 
     return issues
