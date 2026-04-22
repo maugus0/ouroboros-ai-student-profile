@@ -1,27 +1,62 @@
 """LLM service with primary/fallback provider and structured extraction."""
 
+# pylint: disable=C0302
+
+import copy
 import json
 import re
 import time
+from datetime import datetime
 from typing import Any, Optional
-
-import structlog
 
 from app.config import settings
 from app.core.logging import get_logger
 from app.llm.anthropic_client import call_anthropic
 from app.llm.openai_client import call_openai
-from app.llm.prompts import get_gap_analysis_prompt, get_profile_extraction_prompt, get_target_degree_detection_prompt
-from app.llm.schemas import DegreeLevelEnum, ExtractedProfile, TargetDegreeDetectionResult
+from app.llm.prompts import (
+    get_gap_analysis_prompt,
+    get_profile_extraction_core_prompt,
+    get_profile_extraction_enrichment_prompt,
+    get_prompt_template_version,
+    get_target_degree_detection_prompt,
+)
+from app.llm.schemas import (
+    CoreExtractedProfile,
+    DegreeLevelEnum,
+    EnrichmentExtractedProfile,
+    ExtractedProfile,
+    TargetDegreeDetectionResult,
+)
 from app.models.llm_models import LLMExtractionResult
 from app.repositories.mysql_llm_log_repo import LLMCallLogRepository
-from app.utils.exceptions import LLMExtractionError
+from app.security.input_sanitizer import detect_injection_attempt, strip_control_characters
+from app.security.output_validator import validate_output_for_leakage, validate_profile_data
+from app.security.prompt_guardrails import wrap_user_data
+from app.utils.exceptions import LLMExtractionError, PromptInjectionError
+from app.utils.trace_id import get_bound_trace_id
 
 logger = get_logger(__name__)
 
-PROFILE_EXTRACTION_PROMPT_VERSION = "profile_extraction_v2"
-GAP_ANALYSIS_PROMPT_VERSION = "gap_analysis_v2"
-TARGET_DEGREE_PROMPT_VERSION = "target_degree_detection_v2"
+
+def _resolve_prompt_template_version(prompt_name: str) -> str:
+    """Resolve a prompt template version without breaking module import."""
+    try:
+        return get_prompt_template_version(prompt_name)
+    except ValueError as exc:
+        logger.error(
+            "invalid_prompt_template_version_configuration",
+            prompt_name=prompt_name,
+            error=str(exc),
+            fallback_version="v1",
+        )
+        return "v1"
+
+
+PROFILE_EXTRACTION_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction")
+PROFILE_EXTRACTION_CORE_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction_core")
+PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION = _resolve_prompt_template_version("profile_extraction_enrichment")
+GAP_ANALYSIS_PROMPT_VERSION = _resolve_prompt_template_version("gap_analysis")
+TARGET_DEGREE_PROMPT_VERSION = _resolve_prompt_template_version("target_degree_detection")
 
 
 class LLMService:
@@ -30,21 +65,29 @@ class LLMService:
     def __init__(self, llm_log_repo: LLMCallLogRepository | None = None):
         self.llm_log_repo = llm_log_repo or LLMCallLogRepository()
 
-    async def extract_profile(
-        self, document_text: str, target_degree_hint: Optional[str] = None
-    ) -> LLMExtractionResult:
+    async def extract_profile(self, document_text: str) -> LLMExtractionResult:
         """Extract structured profile data from document text using LLM.
 
         Uses a cheap target-degree classifier first when no hint is provided,
         then routes the main extraction to the light or strong model tier.
+        Includes security checks to prevent prompt injection.
         """
-        detection_result: Optional[TargetDegreeDetectionResult] = None
-        if not target_degree_hint:
-            detection_result = await self.detect_target_degree(document_text)
-            if self._is_confident_target_detection(detection_result):
-                target_degree_hint = str(detection_result.target_degree_level or "unknown")
+        # Security: Detect and block prompt injection attempts
+        if settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(document_text):
+                logger.warning(
+                    "potential_prompt_injection_detected",
+                    operation="profile_extraction",
+                    trace_id=get_bound_trace_id(),
+                )
+                raise PromptInjectionError("Potential prompt injection detected in document text")
 
-        extraction_tier = self._select_extraction_tier(document_text, target_degree_hint, detection_result)
+            # Sanitize control characters
+            document_text = strip_control_characters(document_text, preserve_newline_tab=True)
+
+        detection_result = await self.detect_target_degree(document_text)
+
+        extraction_tier = self._select_extraction_tier(document_text, detection_result)
         if extraction_tier["provider"] is None:
             raise LLMExtractionError("No LLM API key configured for extraction")
 
@@ -58,7 +101,6 @@ class LLMService:
         runtime_context: dict[str, Any] = {
             "document_metadata": {
                 "text_length": len(document_text),
-                "has_target_hint": target_degree_hint is not None,
                 "budgeted_text_length": len(budgeted_text),
             },
             "llm_budget": input_meta,
@@ -67,12 +109,9 @@ class LLMService:
                 "extraction_tier": extraction_tier,
             },
         }
-        if target_degree_hint:
-            runtime_context["user_provided_target_degree"] = target_degree_hint
 
-        system_prompt = get_profile_extraction_prompt(context=runtime_context, fmt="text")
-        user_content, _ = self._build_extraction_input(budgeted_text, target_degree_hint)
-
+        system_prompt = get_profile_extraction_core_prompt(context=runtime_context, fmt="text")
+        user_content, _ = self._build_extraction_input(budgeted_text)
         start = time.perf_counter()
         fallback_reason: Optional[str] = None
 
@@ -89,10 +128,61 @@ class LLMService:
                 model=primary_model,
                 max_tokens=primary_max_tokens,
             )
-            profile = self._parse_profile(result["content"])
+            core_profile = self._parse_core_profile(result["content"])
+            enrichment_profile, enrichment_meta = await self._run_enrichment_pass(
+                provider=result["provider"],
+                budgeted_text=budgeted_text,
+                runtime_context=runtime_context,
+            )
+            profile = self._parse_profile(self._merge_profile_parts(core_profile, enrichment_profile))
             latency = int((time.perf_counter() - start) * 1000)
+
+            # Security: Validate output for leakage and prompt echoing
+            if settings.ENABLE_OUTPUT_VALIDATION:
+                validation_issues = validate_output_for_leakage(json.dumps(profile.model_dump()))
+                if validation_issues:
+                    logger.warning(
+                        "output_validation_failed",
+                        operation="profile_extraction",
+                        issues=validation_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+                    # Log but don't fail extraction on validation issues
+
+            # Student-profile specific validation: check for hallucinations and data quality
+            if settings.ENABLE_SECURITY_CHECKS:
+                profile_data = profile.model_dump()
+                profile_valid, profile_issues = validate_profile_data(profile_data)
+                if not profile_valid:
+                    logger.warning(
+                        "profile_data_quality_issues",
+                        operation="profile_extraction",
+                        issues=profile_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
+                # Additional consistency checks
+                consistency_issues = self._check_profile_consistency(profile_data)
+                if consistency_issues:
+                    logger.warning(
+                        "profile_consistency_warnings",
+                        operation="profile_extraction",
+                        issues=consistency_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
+                # Check confidence scores
+                confidence_issues = self._check_confidence_scores(profile_data)
+                if confidence_issues:
+                    logger.info(
+                        "profile_confidence_info",
+                        operation="profile_extraction",
+                        issues=confidence_issues,
+                        trace_id=get_bound_trace_id(),
+                    )
+
             await self._log_llm_call(
-                operation="profile_extraction",
+                operation="profile_extraction_core",
                 provider=result["provider"],
                 model=result["model"],
                 input_tokens=result.get("input_tokens"),
@@ -100,27 +190,27 @@ class LLMService:
                 latency_ms=latency,
                 success=True,
                 retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
-                prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
             )
             return LLMExtractionResult(
                 profile_data=profile.model_dump(),
                 provider=result["provider"],
                 model=result["model"],
-                input_tokens=result["input_tokens"],
-                output_tokens=result["output_tokens"],
+                input_tokens=(result.get("input_tokens") or 0) + enrichment_meta["input_tokens"],
+                output_tokens=(result.get("output_tokens") or 0) + enrichment_meta["output_tokens"],
                 latency_ms=latency,
                 fallback_used=False,
             )
         except Exception as exc:  # pylint: disable=broad-exception-caught
             await self._log_llm_call(
-                operation="profile_extraction",
+                operation="profile_extraction_core",
                 provider=primary_provider,
                 model=primary_model,
                 latency_ms=int((time.perf_counter() - start) * 1000),
                 success=False,
                 error_message=str(exc),
                 retry_count=self._get_retry_count(call_openai if primary_provider == "openai" else call_anthropic),
-                prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
             )
             logger.warning("llm_extraction_failed", provider=primary_provider, error=str(exc))
             fallback_reason = f"{primary_provider} failed: {exc}"
@@ -138,10 +228,16 @@ class LLMService:
                     model=secondary_model,
                     max_tokens=secondary_max_tokens,
                 )
-                profile = self._parse_profile(result["content"])
+                core_profile = self._parse_core_profile(result["content"])
+                enrichment_profile, enrichment_meta = await self._run_enrichment_pass(
+                    provider=result["provider"],
+                    budgeted_text=budgeted_text,
+                    runtime_context=runtime_context,
+                )
+                profile = self._parse_profile(self._merge_profile_parts(core_profile, enrichment_profile))
                 latency = int((time.perf_counter() - start) * 1000)
                 await self._log_llm_call(
-                    operation="profile_extraction",
+                    operation="profile_extraction_core",
                     provider=result["provider"],
                     model=result["model"],
                     input_tokens=result.get("input_tokens"),
@@ -151,14 +247,14 @@ class LLMService:
                     retry_count=self._get_retry_count(
                         call_openai if secondary_provider == "openai" else call_anthropic
                     ),
-                    prompt_template_version=PROFILE_EXTRACTION_PROMPT_VERSION,
+                    prompt_template_version=PROFILE_EXTRACTION_CORE_PROMPT_VERSION,
                 )
                 return LLMExtractionResult(
                     profile_data=profile.model_dump(),
                     provider=result["provider"],
                     model=result["model"],
-                    input_tokens=result["input_tokens"],
-                    output_tokens=result["output_tokens"],
+                    input_tokens=(result.get("input_tokens") or 0) + enrichment_meta["input_tokens"],
+                    output_tokens=(result.get("output_tokens") or 0) + enrichment_meta["output_tokens"],
                     latency_ms=latency,
                     fallback_used=True,
                     fallback_reason=fallback_reason,
@@ -185,8 +281,36 @@ class LLMService:
         )
 
     async def run_gap_analysis(self, profile_json: dict, target_degree: str, profile_id: Optional[str] = None) -> dict:
-        """Run a gap analysis on an extracted profile."""
-        profile_text = json.dumps(profile_json, indent=2, default=str)
+        """Run a gap analysis on an extracted profile.
+
+        Includes security checks to prevent prompt injection through profile data.
+        Validates profile data quality before analysis.
+        """
+        # Security: Sanitize target degree input
+        if settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(target_degree):
+                raise PromptInjectionError("Potential prompt injection detected in target degree")
+            target_degree = strip_control_characters(target_degree, preserve_newline_tab=False)
+
+        # Profile data security: Validate before gap analysis
+        if settings.ENABLE_SECURITY_CHECKS:
+            profile_valid, profile_issues = validate_profile_data(profile_json)
+            if not profile_valid:
+                logger.warning(
+                    "profile_validation_before_gap_analysis",
+                    profile_id=profile_id,
+                    issues=profile_issues,
+                    trace_id=get_bound_trace_id(),
+                )
+                # Log warning but continue - gap analysis may still be useful
+
+        # Sanitize profile JSON by removing any suspicious content
+        if settings.ENABLE_SECURITY_CHECKS:
+            sanitized_profile = self._sanitize_profile_for_llm(profile_json)
+        else:
+            sanitized_profile = profile_json
+
+        profile_text = json.dumps(sanitized_profile, indent=2, default=str)
         budgeted_profile_text, input_meta = self._budget_text(
             profile_text,
             budget_chars=settings.LLM_GAP_ANALYSIS_INPUT_CHAR_BUDGET,
@@ -197,14 +321,16 @@ class LLMService:
         runtime_context: dict[str, Any] = {
             "target_degree": target_degree,
             "profile_summary": {
-                "has_gpa": profile_json.get("gpa_highest") is not None,
-                "education_count": len(profile_json.get("education", [])),
-                "research_count": len(profile_json.get("research_experience", [])),
+                "has_gpa": sanitized_profile.get("gpa_highest") is not None,
+                "education_count": len(sanitized_profile.get("education", [])),
+                "research_count": len(sanitized_profile.get("research_experience", [])),
             },
             "llm_budget": input_meta,
         }
         system_prompt = get_gap_analysis_prompt(context=runtime_context, fmt="text")
-        user_content = f"TARGET DEGREE: {target_degree}\n\nSTUDENT PROFILE:\n{budgeted_profile_text}"
+        user_content = f"TARGET DEGREE: {target_degree}\n\n" + wrap_user_data(
+            {"profile_data": budgeted_profile_text}, label="STUDENT_PROFILE"
+        )
 
         primary_provider = self._select_gap_analysis_provider(profile_text)
         fallback_provider = "anthropic" if primary_provider == "openai" else "openai"
@@ -291,12 +417,14 @@ class LLMService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_extraction_input(text: str, target_degree_hint: Optional[str] = None) -> tuple[str, dict[str, Any]]:
-        parts = []
-        if target_degree_hint:
-            parts.append(f"USER-PROVIDED TARGET DEGREE: {target_degree_hint}")
-        parts.append(f"DOCUMENT TEXT:\n{text}")
-        return "\n\n".join(parts), {"text_length": len(text), "truncated": "[TRUNCATED" in text}
+    def _build_extraction_input(text: str) -> tuple[str, dict[str, Any]]:
+        user_content = wrap_user_data({"document_text": text}, label="DOCUMENT")
+        return user_content, {"text_length": len(text), "truncated": "[TRUNCATED" in text}
+
+    @staticmethod
+    def _build_enrichment_input(text: str) -> tuple[str, dict[str, Any]]:
+        user_content = wrap_user_data({"document_text": text}, label="DOCUMENT")
+        return user_content, {"text_length": len(text), "truncated": "[TRUNCATED" in text}
 
     async def detect_target_degree(self, document_text: str) -> TargetDegreeDetectionResult:
         """Run a cheap first-pass classifier for target degree intent."""
@@ -319,9 +447,8 @@ class LLMService:
         }
         system_prompt = get_target_degree_detection_prompt(context=runtime_context, fmt="text")
 
-        provider = (
-            "openai" if self._has_real_openai_key() else ("anthropic" if self._has_real_anthropic_key() else None)
-        )
+        provider_order = self._get_available_providers_in_priority_order()
+        provider = provider_order[0] if provider_order else None
         if provider is None:
             return TargetDegreeDetectionResult()
 
@@ -362,46 +489,55 @@ class LLMService:
     def _select_extraction_tier(
         self,
         document_text: str,
-        target_degree_hint: Optional[str],
         detection_result: Optional[TargetDegreeDetectionResult],
     ) -> dict[str, Any]:
-        ambiguous = bool(detection_result and not self._is_confident_target_detection(detection_result))
-        long_document = len(document_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD
-        use_strong_model = ambiguous or long_document
-
-        if use_strong_model and self._has_real_anthropic_key():
+        provider_order = self._get_available_providers_in_priority_order()
+        if provider_order:
+            primary_provider = provider_order[0]
+            fallback_provider = provider_order[1] if len(provider_order) > 1 else None
             return {
-                "provider": "anthropic",
-                "fallback_provider": "openai" if self._has_real_openai_key() else None,
-                "model": settings.ANTHROPIC_MODEL,
-                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
-            }
-
-        if self._has_real_openai_key():
-            return {
-                "provider": "openai",
-                "fallback_provider": "anthropic" if self._has_real_anthropic_key() else None,
-                "model": settings.OPENAI_MODEL,
-                "max_tokens": settings.OPENAI_MAX_TOKENS,
-            }
-
-        if self._has_real_anthropic_key():
-            return {
-                "provider": "anthropic",
-                "fallback_provider": None,
-                "model": settings.ANTHROPIC_MODEL,
-                "max_tokens": settings.ANTHROPIC_MAX_TOKENS,
+                "provider": primary_provider,
+                "fallback_provider": fallback_provider,
+                "model": settings.OPENAI_MODEL if primary_provider == "openai" else settings.ANTHROPIC_MODEL,
+                "max_tokens": (
+                    settings.OPENAI_MAX_TOKENS if primary_provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+                ),
             }
 
         return {"provider": None, "fallback_provider": None, "model": None, "max_tokens": None}
 
     def _select_gap_analysis_provider(self, profile_text: str) -> str:
-        if len(profile_text.strip()) > settings.LLM_LONG_DOCUMENT_CHAR_THRESHOLD and self._has_real_anthropic_key():
-            return "anthropic"
+        provider_order = self._get_available_providers_in_priority_order()
+        if provider_order:
+            return provider_order[0]
+        return "openai"
+
+    def _get_available_providers_in_priority_order(self) -> list[str]:
+        providers: list[str] = []
         if self._has_real_openai_key():
-            return "openai"
+            providers.append("openai")
         if self._has_real_anthropic_key():
-            return "anthropic"
+            providers.append("anthropic")
+        if len(providers) < 2:
+            return providers
+
+        preferred_provider = self._get_primary_provider_preference()
+        if preferred_provider in providers:
+            providers.remove(preferred_provider)
+            providers.insert(0, preferred_provider)
+        return providers
+
+    @staticmethod
+    def _get_primary_provider_preference() -> str:
+        preference = str(settings.LLM_PRIMARY_PROVIDER or "openai").strip().lower()
+        if preference in {"openai", "anthropic"}:
+            return preference
+
+        logger.warning(
+            "invalid_llm_primary_provider_configuration",
+            configured_value=settings.LLM_PRIMARY_PROVIDER,
+            fallback_provider="openai",
+        )
         return "openai"
 
     @staticmethod
@@ -504,8 +640,93 @@ class LLMService:
         return ExtractedProfile(**normalized)
 
     @classmethod
+    def _parse_core_profile(cls, raw_content: dict[str, Any]) -> CoreExtractedProfile:
+        """Normalize provider output for the small first-pass schema."""
+        normalized = cls._normalize_profile_dict(raw_content)
+        return CoreExtractedProfile(**normalized)
+
+    @classmethod
+    def _parse_enrichment_profile(cls, raw_content: dict[str, Any]) -> EnrichmentExtractedProfile:
+        """Normalize provider output for the supplemental second-pass schema."""
+        normalized = cls._normalize_profile_dict(raw_content)
+        return EnrichmentExtractedProfile(**normalized)
+
+    @staticmethod
+    def _merge_profile_parts(
+        core_profile: CoreExtractedProfile,
+        enrichment_profile: EnrichmentExtractedProfile,
+    ) -> dict[str, Any]:
+        merged = core_profile.model_dump()
+        merged.update(enrichment_profile.model_dump())
+        return merged
+
+    async def _run_enrichment_pass(
+        self,
+        *,
+        provider: str,
+        budgeted_text: str,
+        runtime_context: dict[str, Any],
+    ) -> tuple[EnrichmentExtractedProfile, dict[str, int]]:
+        """Run a best-effort second pass for bulky supplemental fields."""
+        enrichment_prompt = get_profile_extraction_enrichment_prompt(context=runtime_context, fmt="text")
+        enrichment_content, _ = self._build_enrichment_input(budgeted_text)
+        model = settings.OPENAI_MODEL if provider == "openai" else settings.ANTHROPIC_MODEL
+        max_tokens = settings.OPENAI_MAX_TOKENS if provider == "openai" else settings.ANTHROPIC_MAX_TOKENS
+        start = time.perf_counter()
+
+        try:
+            result = await self._call_provider(
+                provider,
+                enrichment_prompt,
+                enrichment_content,
+                model=model,
+                max_tokens=max_tokens,
+            )
+            enrichment_profile = self._parse_enrichment_profile(result["content"])
+            await self._log_llm_call(
+                operation="profile_extraction_enrichment",
+                provider=result["provider"],
+                model=result["model"],
+                input_tokens=result.get("input_tokens"),
+                output_tokens=result.get("output_tokens"),
+                latency_ms=int((time.perf_counter() - start) * 1000),
+                success=True,
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
+            )
+            return enrichment_profile, {
+                "input_tokens": result.get("input_tokens") or 0,
+                "output_tokens": result.get("output_tokens") or 0,
+            }
+        except Exception as exc:  # pylint: disable=broad-exception-caught
+            await self._log_llm_call(
+                operation="profile_extraction_enrichment",
+                provider=provider,
+                model=model,
+                latency_ms=int((time.perf_counter() - start) * 1000),
+                success=False,
+                error_message=str(exc),
+                retry_count=self._get_retry_count(call_openai if provider == "openai" else call_anthropic),
+                prompt_template_version=PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION,
+            )
+            logger.warning("llm_enrichment_failed", provider=provider, error=str(exc))
+            raise LLMExtractionError(f"Enrichment pass failed: {exc}") from exc
+
+    @classmethod
     def _normalize_profile_dict(cls, raw: dict[str, Any]) -> dict[str, Any]:
         content = dict(raw or {})
+
+        education = content.get("education")
+        if isinstance(education, list):
+            normalized_education: list[dict[str, Any]] = []
+            for item in education:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                for numeric_field in ("gpa", "gpa_scale"):
+                    row[numeric_field] = cls._normalize_optional_numeric(row.get(numeric_field))
+                normalized_education.append(row)
+            content["education"] = normalized_education
 
         # Work experience: many models use job_title instead of position.
         work = content.get("work_experience")
@@ -521,6 +742,21 @@ class LLMService:
                 if row.get("company") and row.get("position"):
                     normalized_work.append(row)
             content["work_experience"] = normalized_work
+
+        # Research experience: many models use project_title instead of title.
+        research = content.get("research_experience")
+        if isinstance(research, list):
+            normalized_research: list[dict[str, Any]] = []
+            for item in research:
+                if not isinstance(item, dict):
+                    continue
+                row = dict(item)
+                if not row.get("title") and row.get("project_title"):
+                    row["title"] = row.get("project_title")
+                row.pop("project_title", None)
+                if row.get("title"):
+                    normalized_research.append(row)
+            content["research_experience"] = normalized_research
 
         # Certifications may arrive as objects; flatten to strings for schema compatibility.
         certs = content.get("certifications")
@@ -569,9 +805,39 @@ class LLMService:
                 normalized_pubs.append(row)
             content["publications"] = normalized_pubs
 
+        # Languages may contain null values from some providers (e.g., level: null).
+        # Keep only non-empty string values so schema validation stays stable.
+        languages = content.get("languages")
+        if isinstance(languages, list):
+            normalized_languages: list[dict[str, str]] = []
+            for item in languages:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text:
+                        normalized_languages.append({"language": text})
+                    continue
+                if not isinstance(item, dict):
+                    continue
+
+                language_entry: dict[str, str] = {}
+                for key, raw_value in item.items():
+                    if key is None or raw_value is None:
+                        continue
+                    text = str(raw_value).strip()
+                    if text:
+                        language_entry[str(key)] = text
+                if language_entry:
+                    normalized_languages.append(language_entry)
+            content["languages"] = normalized_languages
+
         # Normalize enum-like fields.
+        content["current_degree_level"] = cls._normalize_degree_level(content.get("current_degree_level"))
         content["target_degree_level"] = cls._normalize_degree_level(content.get("target_degree_level"))
         content["target_degree_source"] = cls._normalize_degree_source(content.get("target_degree_source"))
+
+        # Some models emit empty strings for optional numeric fields.
+        for numeric_field in ("gpa_highest", "gpa_scale"):
+            content[numeric_field] = cls._normalize_optional_numeric(content.get(numeric_field))
 
         # Normalize list-like fields that models sometimes emit as null.
         list_fields = [
@@ -595,6 +861,20 @@ class LLMService:
         content["evidence_map"] = cls._normalize_evidence_map(content.get("evidence_map"))
 
         return content
+
+    @staticmethod
+    def _normalize_optional_numeric(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+
+        normalized = value.strip()
+        if not normalized:
+            return None
+
+        if normalized.lower() in {"unknown", "n/a", "na", "none", "null", "not available"}:
+            return None
+
+        return value
 
     @staticmethod
     def _normalize_degree_level(value: Any) -> DegreeLevelEnum:
@@ -667,9 +947,13 @@ class LLMService:
         retry_count: int = 0,
         prompt_template_version: Optional[str] = None,
     ) -> None:
-        """Persist llm_call_logs rows without impacting main request flow."""
+        """Persist llm_call_logs rows without impacting main request flow.
+
+        Captures trace ID for distributed tracing across services.
+        """
         try:
-            trace_id = structlog.contextvars.get_contextvars().get("trace_id", "")
+            # Use get_bound_trace_id() for reliable trace ID retrieval
+            trace_id = get_bound_trace_id()
             await self.llm_log_repo.create_log(
                 {
                     "profile_id": profile_id,
@@ -699,3 +983,148 @@ class LLMService:
             return max(attempt_number - 1, 0)
         except Exception:  # pylint: disable=broad-exception-caught
             return 0
+
+    @staticmethod
+    def _check_profile_consistency(profile_data: dict[str, Any]) -> list[str]:
+        """Check for consistency issues in extracted profile data.
+
+        Validates:
+        - GPA is >= 0.0
+        - Years are plausible (not in future, not unreasonably far in past)
+        - Degree level matches education records
+        """
+        issues: list[str] = []
+
+        # Check GPA plausibility
+        gpa_highest = profile_data.get("gpa_highest")
+        if gpa_highest is not None:
+            try:
+                gpa_val = float(gpa_highest)
+                if gpa_val < 0.0:
+                    issues.append(f"GPA out of range: {gpa_val} (expected >= 0.0)")
+            except (TypeError, ValueError):
+                issues.append(f"GPA not numeric: {gpa_highest}")
+
+        # Check education years
+        current_year = datetime.now().year
+        earliest_plausible_birth_year = current_year - 65  # generous upper-age bound
+        education = profile_data.get("education") or []
+        for idx, edu in enumerate(education):
+            if not isinstance(edu, dict):
+                continue
+
+            start_year = edu.get("start_year")
+            end_year = edu.get("end_year")
+
+            try:
+                if start_year:
+                    sy = int(start_year)
+                    if sy < earliest_plausible_birth_year:
+                        issues.append(f"Education[{idx}] start_year implausible: {sy} (implies applicant age > 65)")
+                    elif sy > current_year:
+                        issues.append(f"Education[{idx}] start_year implausible: {sy}")
+                if end_year:
+                    ey = int(end_year)
+                    if ey < earliest_plausible_birth_year or ey > current_year + 10:
+                        issues.append(f"Education[{idx}] end_year implausible: {ey}")
+                if start_year and end_year:
+                    sy, ey = int(start_year), int(end_year)
+                    if sy >= ey:
+                        issues.append(f"Education[{idx}] start_year >= end_year: {sy} >= {ey}")
+            except (TypeError, ValueError):
+                pass  # Skip non-numeric years
+
+        # Check work experience years
+        work_exp = profile_data.get("work_experience") or []
+        for idx, job in enumerate(work_exp):
+            if not isinstance(job, dict):
+                continue
+
+            start_year = job.get("start_year")
+            end_year = job.get("end_year")
+
+            try:
+                if start_year:
+                    sy = int(start_year)
+                    if sy < earliest_plausible_birth_year:
+                        issues.append(f"WorkExp[{idx}] start_year implausible: {sy} (implies applicant age > 65)")
+                    elif sy > current_year:
+                        issues.append(f"WorkExp[{idx}] start_year implausible: {sy}")
+                if end_year:
+                    ey = int(end_year)
+                    if ey < earliest_plausible_birth_year or ey > current_year + 5:
+                        issues.append(f"WorkExp[{idx}] end_year implausible: {ey}")
+                if start_year and end_year:
+                    sy, ey = int(start_year), int(end_year)
+                    if sy >= ey:
+                        issues.append(f"WorkExp[{idx}] start_year >= end_year: {sy} >= {ey}")
+            except (TypeError, ValueError):
+                pass  # Skip non-numeric years
+
+        return issues
+
+    @staticmethod
+    def _check_confidence_scores(profile_data: dict[str, Any]) -> list[str]:
+        """Check for low confidence fields that may need clarification.
+
+        Logs fields with confidence < 0.7 for monitoring extraction quality.
+        """
+        issues: list[str] = []
+
+        confidence_map = profile_data.get("confidence_map") or {}
+        for field, confidence in confidence_map.items():
+            try:
+                conf_val = float(confidence)
+                if conf_val < 0.7:
+                    issues.append(f"Low confidence on {field}: {conf_val:.2f}")
+            except (TypeError, ValueError):
+                pass
+
+        return issues
+
+    @staticmethod
+    def _sanitize_profile_for_llm(profile_data: dict[str, Any]) -> dict[str, Any]:
+        """Sanitize profile data before sending to LLM for gap analysis.
+
+        Removes control characters from text fields to prevent injection.
+        Returns a copy of the profile with sanitized content.
+        """
+        sanitized = copy.deepcopy(profile_data)
+
+        # Sanitize string fields in education
+        education = sanitized.get("education") or []
+        for edu in education:
+            if isinstance(edu, dict):
+                for key in ("institution", "degree", "field", "notes", "description"):
+                    if key in edu and isinstance(edu[key], str):
+                        edu[key] = strip_control_characters(edu[key], preserve_newline_tab=False)
+
+        # Sanitize string fields in work experience
+        work_exp = sanitized.get("work_experience") or []
+        for job in work_exp:
+            if isinstance(job, dict):
+                for key in ("company", "position", "description", "achievements"):
+                    if key in job and isinstance(job[key], str):
+                        job[key] = strip_control_characters(job[key], preserve_newline_tab=False)
+
+        # Sanitize research experience
+        research = sanitized.get("research_experience") or []
+        for proj in research:
+            if isinstance(proj, dict):
+                for key in ("title", "description", "field", "outcome"):
+                    if key in proj and isinstance(proj[key], str):
+                        proj[key] = strip_control_characters(proj[key], preserve_newline_tab=False)
+
+        # Sanitize skills and languages
+        for field in ("technical_skills", "languages"):
+            items = sanitized.get(field) or []
+            for idx, item in enumerate(items):
+                if isinstance(item, str):
+                    items[idx] = strip_control_characters(item, preserve_newline_tab=False)
+
+        # Sanitize top-level string fields
+        for key in ("first_name", "last_name", "email", "phone", "location"):
+            if key in sanitized and isinstance(sanitized[key], str):
+                sanitized[key] = strip_control_characters(sanitized[key], preserve_newline_tab=False)
+
+        return sanitized

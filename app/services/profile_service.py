@@ -6,10 +6,12 @@ import time
 from datetime import date
 from typing import Any, Optional
 
+from app.config import settings
 from app.core.logging import get_logger
 from app.repositories.mysql_document_repo import DocumentRepository
 from app.repositories.mysql_profile_normalized_repo import ProfileNormalizedRepository
 from app.repositories.mysql_profile_repo import ProfileRepository
+from app.security.input_sanitizer import detect_injection_attempt, strip_control_characters
 from app.services.document_parser import DocumentParser
 from app.services.gap_analysis_service import GapAnalysisService
 from app.services.llm_service import LLMService
@@ -29,7 +31,7 @@ from app.services.profile_value_utils import (
     parse_date_text,
     parse_gpa_value,
 )
-from app.utils.exceptions import NotFoundError
+from app.utils.exceptions import NotFoundError, PromptInjectionError
 from app.utils.file_utils import get_file_extension, get_mime_type
 
 logger = get_logger(__name__)
@@ -143,7 +145,6 @@ class ProfileService:
         file_content_base64: str,
         intent: Optional[str] = None,
         document_type: str = "cv",
-        target_degree_hint: Optional[str] = None,
         run_gap_analysis: bool = True,
     ) -> dict[str, Any]:
         """Full pipeline: decode → extract text → LLM parse → store profile + document."""
@@ -159,11 +160,21 @@ class ProfileService:
         extraction = await self.parser.extract_text(file_content_base64, file_name)
         document_text = extraction["text"]
 
+        # Security gate: reject suspicious content before LLM calls.
+        if settings.ENABLE_SECURITY_CHECKS:
+            if detect_injection_attempt(document_text):
+                logger.warning(
+                    "potential_prompt_injection_detected",
+                    operation="profile_parse_pre_llm",
+                )
+                raise PromptInjectionError("Potential prompt injection detected in document text")
+            document_text = strip_control_characters(document_text, preserve_newline_tab=True)
+
         if not document_text.strip():
             logger.warning("empty_document_text", file_name=file_name)
 
         # 2. LLM extraction
-        llm_result = await self.llm_service.extract_profile(document_text, target_degree_hint)
+        llm_result = await self.llm_service.extract_profile(document_text)
         profile_data = dict(llm_result.profile_data or {})
         # Apply ReAct decision pattern to evaluate all fields and derive clarification queue
         profile_data = self._apply_react_decision_pattern(profile_data)
@@ -179,7 +190,7 @@ class ProfileService:
             "profile_prompt_version": "profile_extraction_v2",
             "llm_model_used": llm_result.model,
             "llm_fallback_used": llm_result.fallback_used,
-            "llm_fallback_reason": llm_result.fallback_reason,
+            "llm_fallback_reason": None,
             "total_processing_time_ms": total_ms,
         }
         profile_id = await self.profile_repo.create_profile(record)
@@ -612,6 +623,7 @@ class ProfileService:
         if not row:
             return {
                 "user_id": user_id,
+                "profile_id": None,
                 "completed": False,
                 "missing_fields": default_missing,
                 "optional_missing_fields": default_optional_missing,
@@ -654,6 +666,7 @@ class ProfileService:
 
         return {
             "user_id": user_id,
+            "profile_id": profile_id,
             "completed": completed,
             "missing_fields": missing_fields,
             "optional_missing_fields": optional_missing,
@@ -811,14 +824,22 @@ class ProfileService:
         if gpa_scale is None:
             gpa_scale = inferred_gpa_scale
 
+        date_of_birth = ProfileService._coerce_top_level_value("date_of_birth", profile_data.get("date_of_birth"))
+        current_degree_level = ProfileService._coerce_top_level_value(
+            "current_degree_level", profile_data.get("current_degree_level", "unknown")
+        )
+        target_degree_level = ProfileService._coerce_top_level_value(
+            "target_degree_level", profile_data.get("target_degree_level", "unknown")
+        )
+
         return {
             "full_name": profile_data.get("full_name"),
             "email": profile_data.get("email"),
             "phone": profile_data.get("phone"),
             "nationality": profile_data.get("nationality"),
-            "date_of_birth": profile_data.get("date_of_birth"),
-            "current_degree_level": profile_data.get("current_degree_level", "unknown"),
-            "target_degree_level": profile_data.get("target_degree_level", "unknown"),
+            "date_of_birth": date_of_birth,
+            "current_degree_level": current_degree_level or "unknown",
+            "target_degree_level": target_degree_level or "unknown",
             "target_degree_confidence": profile_data.get("target_degree_confidence"),
             "target_degree_source": profile_data.get("target_degree_source", "unknown"),
             "target_degree_needs_clarification": profile_data.get("target_degree_needs_clarification", False),

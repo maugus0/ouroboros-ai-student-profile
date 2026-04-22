@@ -7,6 +7,7 @@ def test_get_profile_status(client, monkeypatch, service_token_header):
         assert intent == "program_discovery"
         return {
             "user_id": user_id,
+            "profile_id": "profile-1",
             "completed": False,
             "missing_fields": ["email", "gpa"],
             "updated_at": None,
@@ -24,6 +25,7 @@ def test_get_profile_status(client, monkeypatch, service_token_header):
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["user_id"] == "test-user"
+    assert payload["profile_id"] == "profile-1"
     assert payload["completed"] is False
     assert payload["missing_fields"] == ["email", "gpa"]
     assert payload["intent"] == "program_discovery"

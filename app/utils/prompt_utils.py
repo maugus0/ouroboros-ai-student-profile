@@ -100,11 +100,6 @@ def build_prompt_text(
     return "\n".join(lines)
 
 
-# ------------------------------------------------------------------
-# Private helpers
-# ------------------------------------------------------------------
-
-
 def _clean_context(context: dict[str, Any]) -> dict[str, Any]:
     """Strip sensitive / internal-only keys before injecting into prompts."""
     cleaned = dict(context)

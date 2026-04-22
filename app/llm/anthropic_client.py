@@ -1,6 +1,7 @@
 """Anthropic API client with retry logic (fallback provider)."""
 
 import json
+import re
 
 from anthropic import AsyncAnthropic
 from tenacity import retry, stop_after_attempt, wait_exponential
@@ -11,6 +12,62 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 _client: AsyncAnthropic | None = None
+
+
+def _build_response_preview(raw: str, *, limit: int = 800) -> str:
+    """Build a bounded preview of raw model output for debugging."""
+    text = raw.strip()
+    if len(text) <= limit:
+        return text
+
+    head = limit // 2
+    tail = limit - head
+    return f"{text[:head]}\n... [TRUNCATED RAW RESPONSE] ...\n{text[-tail:]}"
+
+
+def _parse_anthropic_json(raw: str) -> dict:
+    """Parse JSON from Anthropic text responses.
+
+    Claude may return valid JSON wrapped in markdown fences or with a short
+    lead-in sentence. Extract the JSON payload before decoding.
+    """
+    text = raw.strip()
+    if not text:
+        raise ValueError("Anthropic returned empty text content")
+
+    candidates = [text]
+
+    fenced_match = re.search(r"```(?:json)?\s*(.*?)\s*```", text, re.IGNORECASE | re.DOTALL)
+    if fenced_match:
+        candidates.insert(0, fenced_match.group(1).strip())
+
+    object_start = text.find("{")
+    if object_start != -1:
+        candidates.append(text[object_start:])
+
+    decoder = json.JSONDecoder()
+    last_error: json.JSONDecodeError | None = None
+    for candidate in candidates:
+        try:
+            parsed, _end_index = decoder.raw_decode(candidate)
+            if not isinstance(parsed, dict):
+                continue
+            return parsed
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    preview = _build_response_preview(text)
+    logger.warning(
+        "anthropic_non_json_response",
+        content_length=len(text),
+        response_preview=preview,
+        parse_error=str(last_error) if last_error is not None else None,
+    )
+    if last_error is not None:
+        raise ValueError(
+            f"Anthropic returned non-JSON content: {last_error}. Response preview: {preview}"
+        ) from last_error
+    raise ValueError("Anthropic returned non-JSON content")
 
 
 def get_anthropic_client() -> AsyncAnthropic:
@@ -60,7 +117,7 @@ async def call_anthropic(
     )
 
     return {
-        "content": json.loads(raw),
+        "content": _parse_anthropic_json(raw),
         "model": model,
         "provider": "anthropic",
         "input_tokens": usage.input_tokens if usage else None,

@@ -101,19 +101,6 @@ def apply_react_decision_pattern(profile_data: dict[str, Any]) -> dict[str, Any]
         else:
             decision_trace[field] = {"decision": "clarify", "reason": reason}
 
-    current_normalized = normalize_degree_level_value("current_degree_level", normalized.get("current_degree_level"))
-    target_normalized = normalize_degree_level_value("target_degree_level", normalized.get("target_degree_level"))
-
-    if (
-        current_normalized not in {None, "unknown"}
-        and target_normalized not in {None, "unknown"}
-        and current_normalized == target_normalized
-    ):
-        decision_trace["target_degree_level"] = {
-            "decision": "clarify",
-            "reason": "ambiguous_current_equals_target",
-        }
-
     fields_to_check = set()
 
     queue = list(normalized.get("clarification_queue") or [])

@@ -26,7 +26,6 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
     data = {
         "intent": "profile_completion",
         "document_type": "cv",
-        "target_degree_hint": "master",
         "run_gap_analysis": "false",
     }
 
@@ -43,7 +42,6 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
     assert payload["data"]["profile_id"] == "test-profile-id"
     assert payload["data"]["received"]["file_name"] == "cv.pdf"
     assert payload["data"]["received"]["document_type"] == "cv"
-    assert payload["data"]["received"]["target_degree_hint"] == "master"
     assert payload["data"]["received"]["run_gap_analysis"] is False
 
 

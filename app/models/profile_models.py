@@ -18,10 +18,6 @@ class ParseRequest(BaseModel):
     document_type: str = Field(default="cv", pattern="^(cv|transcript|unknown)$")
     file_name: str
     file_content_base64: str = Field(description="Base64-encoded file content")
-    target_degree_hint: Optional[str] = Field(
-        default=None,
-        description="Optional user-provided target degree level",
-    )
     run_gap_analysis: bool = Field(
         default=False,
         description="Whether to run automatic gap analysis immediately after profile creation",

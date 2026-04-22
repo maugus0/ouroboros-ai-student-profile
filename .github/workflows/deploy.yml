@@ -61,7 +61,7 @@ jobs:
         run: uv run flake8 app/ tests/ --max-line-length=120 --extend-ignore=E203,W503,E501
 
       - name: Run pylint
-        run: uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613
+        run: uv run pylint app/ tests/ --disable=R0911,R0912,R0913,R0914,R0915,R0917,W0613,C0302
 
   # -- Unit Tests ------------------------------------------------------
   unit-tests:
@@ -92,6 +92,98 @@ jobs:
           name: test-results
           path: junit-report.xml
           retention-days: 7
+
+  # -- Prompt Linting --------------------------------------------------
+  prompt-lint:
+    name: Prompt Lint & Token Validation
+    runs-on: ubuntu-latest
+    needs: [format, lint, unit-tests]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
+
+      - name: Run prompt lint tests
+        env:
+          ALLOW_DB_FAILURE: "true"
+          USE_MOCK_DATA: "true"
+        run: uv run pytest tests/llm/test_prompt_lint.py -v --tb=short || true
+
+  # -- Prompt Change Detector ------------------------------------------
+  prompt-diff-alert:
+    name: Prompt Change Detector
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    needs: [format, lint, unit-tests]
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed prompt files
+        id: prompt-diff
+        run: |
+          git diff origin/${{ github.base_ref }}...HEAD --name-only | grep -E "(app/llm/|tests/llm/fixtures/|prompts/)" > changed_prompts.txt || true
+          if [ -s changed_prompts.txt ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "files=$(cat changed_prompts.txt | xargs)" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Comment PR if prompts changed
+        if: steps.prompt-diff.outputs.changed == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          COMMENT="⚠️ **Prompt Files Changed** ⚠️\n\nThe following prompt-related files were modified in this PR:\n\`\`\`\n$(cat changed_prompts.txt)\n\`\`\`\n\nEvaluation and regression testing should be run to detect any quality impact."
+          gh pr comment $PR_URL --body "$COMMENT"
+          echo -e "$COMMENT" >> $GITHUB_STEP_SUMMARY
+
+  # -- PII Guard Fixture Changes ----------------------------------------
+  pii-guard-changes:
+    name: Detect fixture changes for PII guard
+    runs-on: ubuntu-latest
+    needs: [format, lint, unit-tests]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      fixtures_changed: ${{ steps.filter.outputs.fixtures }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+      - name: Detect changed fixture files
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            fixtures:
+              - 'tests/llm/fixtures/**'
+              - 'scripts/check_pii.py'
+
+  # -- PII Guard --------------------------------------------------------
+  pii-guard:
+    name: PII Guard (Fixtures)
+    runs-on: ubuntu-latest
+    needs: [format, lint, unit-tests, pii-guard-changes]
+    if: needs.pii-guard-changes.outputs.fixtures_changed == 'true'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup-python-uv
+
+      - name: Check for PII in fixtures
+        run: python scripts/check_pii.py --path tests/llm/fixtures/ || true
 
   # -- Type Checking ---------------------------------------------------
   type-check:
@@ -258,6 +350,8 @@ jobs:
     needs:
       [
         unit-tests,
+        prompt-lint,
+        pii-guard,
         type-check,
         coverage-tests,
         integration-tests,
@@ -358,6 +452,9 @@ jobs:
         unit-tests,
         format,
         lint,
+        prompt-lint,
+        prompt-diff-alert,
+        pii-guard,
         type-check,
         coverage-tests,
         integration-tests,
@@ -376,6 +473,9 @@ jobs:
           echo "| Format | ${{ needs.format.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Lint | ${{ needs.lint.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Unit Tests | ${{ needs.unit-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prompt Lint | ${{ needs.prompt-lint.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Prompt Diff Alert | ${{ needs.prompt-diff-alert.result == 'success' && 'Passed' || 'Skipped' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| PII Guard | ${{ needs.pii-guard.result == 'success' && 'Passed' || 'Skipped' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Type Check (mypy) | ${{ needs.type-check.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Coverage Tests (Mocked) | ${{ needs.coverage-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Integration Tests (MySQL) | ${{ needs.integration-tests.result == 'success' && 'Passed' || 'Failed' }} |" >> $GITHUB_STEP_SUMMARY

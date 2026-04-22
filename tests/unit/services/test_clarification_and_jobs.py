@@ -158,6 +158,24 @@ def test_react_marks_low_confidence_critical_field_for_clarification():
     assert normalized["target_degree_needs_clarification"] is True
 
 
+def test_react_allows_same_current_and_target_degree_levels():
+    profile_data = {
+        "current_degree_level": "master",
+        "target_degree_level": "master",
+        "confidence_map": {
+            "current_degree_level": 1.0,
+            "target_degree_level": 1.0,
+        },
+        "clarification_queue": [],
+    }
+
+    normalized = ProfileService._apply_react_decision_pattern(profile_data)
+
+    queue_fields = {item["field"] for item in normalized["clarification_queue"]}
+    assert "target_degree_level" not in queue_fields
+    assert normalized["target_degree_needs_clarification"] is False
+
+
 def test_react_marks_contradicted_field_for_clarification():
     profile_data = {
         "full_name": "John Doe",

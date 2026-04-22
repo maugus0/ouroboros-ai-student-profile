@@ -40,9 +40,16 @@ class Settings(BaseSettings):
     OPENAI_MODEL: str = "gpt-4o-mini"
     OPENAI_MAX_TOKENS: int = 2000
     OPENAI_TEMPERATURE: float = 0.0
+    LLM_PRIMARY_PROVIDER: str = "openai"
 
     TARGET_DEGREE_MODEL: str = "gpt-4o-mini"
     TARGET_DEGREE_MAX_TOKENS: int = 400
+
+    PROFILE_EXTRACTION_PROMPT_VERSION: str = "v2"
+    PROFILE_EXTRACTION_CORE_PROMPT_VERSION: str = "v1"
+    PROFILE_EXTRACTION_ENRICHMENT_PROMPT_VERSION: str = "v1"
+    TARGET_DEGREE_PROMPT_VERSION: str = "v2"
+    GAP_ANALYSIS_PROMPT_VERSION: str = "v2"
 
     LLM_CLASSIFIER_INPUT_CHAR_BUDGET: int = 6000
     LLM_EXTRACTION_INPUT_CHAR_BUDGET: int = 14000
@@ -53,7 +60,7 @@ class Settings(BaseSettings):
     LLM_TRUNCATION_TAIL_CHARS: int = 1500
 
     ANTHROPIC_API_KEY: str = ""
-    ANTHROPIC_MODEL: str = "claude-sonnet-4-20250514"
+    ANTHROPIC_MODEL: str = "claude-haiku-4-5"
     ANTHROPIC_MAX_TOKENS: int = 2000
 
     LLM_MAX_RETRIES: int = 3
@@ -66,6 +73,12 @@ class Settings(BaseSettings):
 
     TESSERACT_PATH: str = ""
     OCR_LANGUAGE: str = "eng"
+
+    # ========== Security (LLMOps) ==========
+    ENABLE_PROMPT_INJECTION_DETECTION: bool = True
+    ENABLE_OUTPUT_VALIDATION: bool = True
+    MAX_INPUT_LENGTH: int = 10000
+    ENABLE_SECURITY_CHECKS: bool = True
 
     # ========== Application ==========
     LOG_LEVEL: str = "INFO"

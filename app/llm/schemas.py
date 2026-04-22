@@ -59,6 +59,41 @@ class PublicationEntry(BaseModel):
     evidence: Optional[str] = None
 
 
+class CoreExtractedProfile(BaseModel):
+    """Smaller first-pass profile extraction payload for reliability."""
+
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    nationality: Optional[str] = None
+    date_of_birth: Optional[str] = None
+
+    target_degree_needs_clarification: bool = False
+    target_degree_reasoning: Optional[str] = None
+
+    education: list[EducationEntry] = Field(default_factory=list)
+    current_degree_level: Optional[DegreeLevelEnum] = Field(default=None)
+    gpa_highest: Optional[float] = None
+    gpa_scale: Optional[float] = None
+
+    work_experience: list[WorkExperience] = Field(default_factory=list)
+    research_experience: list[ResearchExperience] = Field(default_factory=list)
+
+    target_degree_level: Optional[DegreeLevelEnum] = Field(default=DegreeLevelEnum.UNKNOWN)
+    target_degree_confidence: Optional[float] = Field(ge=0.0, le=1.0, default=0.5)
+    target_degree_source: Optional[TargetDegreeSourceEnum] = Field(default=TargetDegreeSourceEnum.UNKNOWN)
+
+
+class EnrichmentExtractedProfile(BaseModel):
+    """Second-pass supplemental extraction payload."""
+
+    technical_skills: list[str] = Field(default_factory=list)
+    languages: list[dict[str, str]] = Field(default_factory=list)
+    certifications: list[str] = Field(default_factory=list)
+    research_interests: list[str] = Field(default_factory=list)
+    publications: list[PublicationEntry] = Field(default_factory=list)
+
+
 class ExtractedProfile(BaseModel):
     """Complete extracted profile returned by the LLM."""
 

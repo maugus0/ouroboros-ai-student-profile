@@ -1,0 +1,6 @@
+{
+  "id": "fixture-sample-profile-001",
+  "document_type": "resume",
+  "document_source": "test_fixtures",
+  "content": "John Doe\nStudent at National University of Singapore\nEmail: john.doe@example.com\nPhone: +65 9999 9999\n\nEducation:\nBachelor of Science in Computer Science\nNational University of Singapore (2022-2026)\nCurrent GPA: 3.8/4.0\n\nWork Experience:\nIntern, Tech Company A (2024)\nPosition: Software Development Intern\nDuration: 3 months\nTechnologies: Python, FastAPI, MySQL\n\nProjects:\nStudent Profile Extraction System\nBuilt an LLM-powered system to extract and validate student profiles\n\nSkills:\nPython, JavaScript, SQL, FastAPI, React\n\nLanguages:\nEnglish (Fluent), Mandarin (Conversational)"
+}
