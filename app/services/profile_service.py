@@ -250,6 +250,20 @@ class ProfileService:
 
         logger.info("profile_pipeline_completed", profile_id=profile_id, total_ms=total_ms)
 
+        agent_reasoning = self._build_parse_agent_reasoning(
+            profile_data=profile_data,
+            gap_analysis=gap_analysis,
+            llm_provider=llm_result.provider,
+            llm_model=llm_result.model,
+            run_gap_analysis=run_gap_analysis,
+            extraction_metadata={
+                "extraction_method": extraction.get("extraction_method"),
+                "ocr_used": extraction.get("ocr_used"),
+                "extracted_text_length": extraction.get("extracted_text_length"),
+                "fallback_used": llm_result.fallback_used,
+            },
+        )
+
         return {
             "profile_id": profile_id,
             "profile_data": profile_data,
@@ -260,6 +274,7 @@ class ProfileService:
             "gap_analysis": gap_analysis,
             "total_processing_time_ms": total_ms,
             "intent": intent,
+            "agent_reasoning": agent_reasoning,
         }
 
     async def get_profile(self, profile_id: str) -> dict[str, Any]:
@@ -490,6 +505,12 @@ class ProfileService:
                 "applied_fields": [],
                 "readiness": readiness,
                 "chat_context": {"chat_id": chat_id, "message_id": message_id},
+                "agent_reasoning": self._build_chat_collection_reasoning(
+                    applied_fields=[],
+                    pending_fields=[],
+                    correction_fields=[],
+                    readiness=readiness,
+                ),
             }
 
         # Seed profile if absent using any immediately mappable fields.
@@ -597,18 +618,176 @@ class ProfileService:
                 )
 
         readiness = await self.get_profile_status(user_id)
+        applied_fields = [str(field) for field in submission.get("applied_fields", []) if field]
+        pending_fields = list(pending_set)
+        correction_list = list(correction_set)
 
         return {
             "user_id": user_id,
             "profile_id": profile_id,
-            "applied_fields": submission.get("applied_fields", []),
+            "applied_fields": applied_fields,
             "clarification_queue": submission.get("clarification_queue", []),
-            "pending_clarification_fields": list(pending_set),
-            "correction_fields": list(correction_set),
+            "pending_clarification_fields": pending_fields,
+            "correction_fields": correction_list,
             "extraction_telemetry": self._merge_extraction_telemetry(None, extraction_telemetry),
             "readiness": readiness,
             "chat_context": {"chat_id": chat_id, "message_id": message_id},
+            "agent_reasoning": self._build_chat_collection_reasoning(
+                applied_fields=applied_fields,
+                pending_fields=pending_fields,
+                correction_fields=correction_list,
+                readiness=readiness,
+            ),
         }
+
+    @staticmethod
+    def _build_chat_collection_reasoning(
+        *,
+        applied_fields: list[str],
+        pending_fields: list[str],
+        correction_fields: list[str],
+        readiness: dict[str, Any],
+    ) -> dict[str, Any]:
+        decision_factors: list[str] = []
+        if applied_fields:
+            decision_factors.append(f"Applied fields: {', '.join(applied_fields)}")
+        if pending_fields:
+            decision_factors.append(f"Pending clarification fields: {', '.join(pending_fields)}")
+        if correction_fields:
+            decision_factors.append(f"Correction fields: {', '.join(correction_fields)}")
+
+        missing_fields = readiness.get("missing_fields") if isinstance(readiness, dict) else []
+        if isinstance(missing_fields, list) and missing_fields:
+            decision_factors.append(f"Remaining required fields: {', '.join(str(field) for field in missing_fields)}")
+
+        next_field = None
+        if isinstance(missing_fields, list) and missing_fields:
+            next_field = str(missing_fields[0])
+
+        if not decision_factors:
+            decision_factors.append("No new profile values were applied from this message.")
+
+        return {
+            "approach": "Collect and persist profile information from chat, then re-check readiness.",
+            "decision_factors": decision_factors,
+            "next_field": next_field,
+            "confidence": 0.9,
+        }
+
+    @staticmethod
+    def _build_parse_agent_reasoning(
+        *,
+        profile_data: dict[str, Any],
+        gap_analysis: Optional[dict[str, Any]],
+        llm_provider: Optional[str],
+        llm_model: Optional[str],
+        run_gap_analysis: bool,
+        extraction_metadata: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        extraction_summary = profile_data.get("extraction_summary") if isinstance(profile_data, dict) else {}
+        if not isinstance(extraction_summary, dict):
+            extraction_summary = {}
+
+        high_confidence_fields = extraction_summary.get("high_confidence_fields")
+        if not isinstance(high_confidence_fields, list):
+            high_confidence_fields = []
+
+        clarification_queue = profile_data.get("clarification_queue") if isinstance(profile_data, dict) else []
+        if not isinstance(clarification_queue, list):
+            clarification_queue = []
+
+        react_decision_trace = profile_data.get("react_decision_trace") if isinstance(profile_data, dict) else {}
+        if not isinstance(react_decision_trace, dict):
+            react_decision_trace = {}
+
+        parse_decisions: list[str] = []
+        decision_priority = [
+            "full_name",
+            "email",
+            "current_degree_level",
+            "target_degree_level",
+            "gpa",
+            "gpa_scale",
+            "intended_field_of_study",
+            "target_study_country",
+            "enrollment_timeline",
+            "funding_source",
+            "publications",
+        ]
+        for field in decision_priority:
+            trace_entry = react_decision_trace.get(field)
+            if not isinstance(trace_entry, dict):
+                continue
+            decision = str(trace_entry.get("decision") or "").strip().lower()
+            reason_code = str(trace_entry.get("reason") or "").strip()
+            if decision == "clarify":
+                parse_decisions.append(
+                    f"{field}: clarify ({ProfileService._humanize_clarification_reason(reason_code)})"
+                )
+            elif decision == "accept":
+                parse_decisions.append(f"{field}: accept")
+
+        clarification_reasons: list[str] = []
+        for queue_item in clarification_queue:
+            if not isinstance(queue_item, dict):
+                continue
+            field = str(queue_item.get("field") or "").strip()
+            question = str(queue_item.get("question") or "").strip()
+            trace_entry = react_decision_trace.get(field)
+            reason_code = trace_entry.get("reason") if isinstance(trace_entry, dict) else None
+            human_reason = ProfileService._humanize_clarification_reason(str(reason_code or ""))
+            if field:
+                prompt_suffix = f" (prompt: {question})" if question else ""
+                clarification_reasons.append(f"{field}: {human_reason}{prompt_suffix}")
+
+        decision_factors = [
+            f"Parsed document with {llm_provider or 'unknown provider'} / {llm_model or 'unknown model'}.",
+            f"High-confidence fields extracted: {len(high_confidence_fields)}.",
+            f"Clarification queue size: {len(clarification_queue)}.",
+        ]
+        if isinstance(extraction_metadata, dict):
+            extraction_method = extraction_metadata.get("extraction_method")
+            if extraction_method:
+                decision_factors.append(f"Extraction method: {extraction_method}.")
+            if extraction_metadata.get("ocr_used") is True:
+                decision_factors.append("OCR was used during text extraction.")
+            text_length = extraction_metadata.get("extracted_text_length")
+            if isinstance(text_length, int):
+                decision_factors.append(f"Parsed text length: {text_length} chars.")
+            if extraction_metadata.get("fallback_used") is True:
+                decision_factors.append("LLM fallback path was used.")
+        if run_gap_analysis:
+            decision_factors.append(
+                "Gap analysis executed immediately after profile extraction."
+                if isinstance(gap_analysis, dict)
+                else "Gap analysis was requested but did not complete successfully."
+            )
+
+        next_field = None
+        if clarification_queue:
+            first = clarification_queue[0]
+            if isinstance(first, dict) and isinstance(first.get("field"), str):
+                next_field = first["field"]
+
+        return {
+            "approach": "Parse document, extract profile fields, and build clarification-ready profile state.",
+            "decision_factors": decision_factors,
+            "parse_decisions": parse_decisions,
+            "clarification_reasons": clarification_reasons,
+            "next_field": next_field,
+            "confidence": 0.9,
+        }
+
+    @staticmethod
+    def _humanize_clarification_reason(reason_code: str) -> str:
+        code = (reason_code or "").strip().lower()
+        mapping = {
+            "missing_or_unknown": "Missing or unknown value",
+            "contradiction_detected": "Potential contradiction detected",
+            "low_confidence": "Low confidence extraction",
+            "invalid_confidence": "Invalid confidence score",
+        }
+        return mapping.get(code, "Needs confirmation")
 
     async def get_profile_status(self, user_id: str, intent: str | None = None) -> dict[str, Any]:
         """Return a deterministic readiness snapshot for the user's latest profile."""
