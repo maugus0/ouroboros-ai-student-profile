@@ -117,7 +117,7 @@ tests/integration/
 **`conftest.py`** provides:
 
 - `integration_client` — FastAPI TestClient with app
-- `service_token_header` — Internal bearer-token authentication header
+- `internal_token_header` — Internal bearer-token authentication header
 - `setup_integration_db` — Auto-runs migrations (session-scoped)
 - `cleanup_integration_db` — Truncates tables after each test
 
@@ -127,13 +127,13 @@ tests/integration/
 
 ```python
 def test_parse_document_and_create_profile(
-    integration_client, cleanup_integration_db, service_token_header
+    integration_client, cleanup_integration_db, internal_token_header
 ):
     profile_id = _seed_profile("John Doe", "john@example.com", 3.8)
 
     response = integration_client.get(
         f"/api/v1/profiles/{profile_id}",
-        headers=service_token_header,
+        headers=internal_token_header,
     )
 
     assert response.status_code == 200
@@ -219,12 +219,12 @@ uv run pytest tests/integration/ -vv
 
 1. Create test file in `tests/integration/`
 2. Seed required rows directly in integration DB (keep tests deterministic)
-3. Inject fixtures: `integration_client`, `cleanup_integration_db`, `service_token_header`
+3. Inject fixtures: `integration_client`, `cleanup_integration_db`, `internal_token_header`
 4. Use actual API endpoints (not mocks)
 5. Verify database persistence, not just in-memory state
 
 ```python
-def test_new_feature(integration_client, cleanup_integration_db, service_token_header):
+def test_new_feature(integration_client, cleanup_integration_db, internal_token_header):
     # Your test here
     pass
 ```
