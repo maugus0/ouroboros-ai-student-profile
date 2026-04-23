@@ -619,8 +619,8 @@ class ProfileService:
 
         readiness = await self.get_profile_status(user_id)
         applied_fields = [str(field) for field in submission.get("applied_fields", []) if field]
-        pending_fields = list(pending_set)
-        correction_list = list(correction_set)
+        pending_fields = sorted(pending_set)
+        correction_list = sorted(correction_set)
 
         return {
             "user_id": user_id,
@@ -658,7 +658,7 @@ class ProfileService:
 
         missing_fields = readiness.get("missing_fields") if isinstance(readiness, dict) else []
         if isinstance(missing_fields, list) and missing_fields:
-            decision_factors.append(f"Remaining required fields: {', '.join(str(field) for field in missing_fields)}")
+            decision_factors.append(f"Remaining missing fields: {', '.join(str(field) for field in missing_fields)}")
 
         next_field = None
         if isinstance(missing_fields, list) and missing_fields:

@@ -5,7 +5,7 @@ import os
 
 def test_settings_load():
     os.environ.setdefault("ALLOW_DB_FAILURE", "true")
-    os.environ.setdefault("X_SERVICE_TOKEN", "test-service-token")
+    os.environ.setdefault("INTERNAL_TOKEN_PUBLIC_KEY", "test-service-token")
 
     from app.config import settings
 
@@ -17,7 +17,7 @@ def test_settings_load():
 
 def test_settings_db_helpers():
     os.environ.setdefault("ALLOW_DB_FAILURE", "true")
-    os.environ.setdefault("X_SERVICE_TOKEN", "test-service-token")
+    os.environ.setdefault("INTERNAL_TOKEN_PUBLIC_KEY", "test-service-token")
 
     from app.config import settings
 
@@ -28,7 +28,7 @@ def test_settings_db_helpers():
 
 
 def test_allowed_extensions():
-    os.environ.setdefault("X_SERVICE_TOKEN", "test-service-token")
+    os.environ.setdefault("INTERNAL_TOKEN_PUBLIC_KEY", "test-service-token")
     from app.config import settings
 
     exts = settings.get_allowed_extensions_list()

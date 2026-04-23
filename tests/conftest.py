@@ -31,7 +31,7 @@ def mock_settings():
 
 
 @pytest.fixture
-def service_token_header():
+def internal_token_header():
     """Returns an internal bearer token for testing.
 
     Note: Legacy X-Service-Token support has been removed.

@@ -1,7 +1,7 @@
 """Tests for the profile status API."""
 
 
-def test_get_profile_status(client, monkeypatch, service_token_header):
+def test_get_profile_status(client, monkeypatch, internal_token_header):
     async def fake_get_profile_status(user_id: str, intent: str | None = None):
         assert user_id == "test-user"
         assert intent == "program_discovery"
@@ -18,7 +18,7 @@ def test_get_profile_status(client, monkeypatch, service_token_header):
 
     response = client.get(
         "/api/v1/profiles/status",
-        headers={**service_token_header, "X-User-ID": "test-user"},
+        headers={**internal_token_header, "X-User-ID": "test-user"},
         params={"intent": "program_discovery"},
     )
 
@@ -31,17 +31,17 @@ def test_get_profile_status(client, monkeypatch, service_token_header):
     assert payload["intent"] == "program_discovery"
 
 
-def test_get_profile_status_rejects_mismatched_header_and_jwt_sub(client, service_token_header):
+def test_get_profile_status_rejects_mismatched_header_and_jwt_sub(client, internal_token_header):
     response = client.get(
         "/api/v1/profiles/status",
-        headers={**service_token_header, "X-User-ID": "different-user"},
+        headers={**internal_token_header, "X-User-ID": "different-user"},
     )
 
     assert response.status_code == 403
     assert response.json()["detail"] == "X-User-ID does not match token subject"
 
 
-def test_sync_user_profile(client, monkeypatch, service_token_header):
+def test_sync_user_profile(client, monkeypatch, internal_token_header):
     async def fake_sync_user_profile(user_id: str, payload: dict):
         assert user_id == "user-123"
         assert payload == {"full_name": "Jane Doe", "email": "jane@example.com"}
@@ -57,7 +57,7 @@ def test_sync_user_profile(client, monkeypatch, service_token_header):
 
     response = client.post(
         "/api/v1/profiles/sync-user",
-        headers={**service_token_header, "X-User-ID": "user-123"},
+        headers={**internal_token_header, "X-User-ID": "user-123"},
         json={"full_name": "Jane Doe", "email": "jane@example.com"},
     )
 
@@ -68,7 +68,7 @@ def test_sync_user_profile(client, monkeypatch, service_token_header):
     assert payload["created"] is True
 
 
-def test_collect_from_chat(client, monkeypatch, service_token_header):
+def test_collect_from_chat(client, monkeypatch, internal_token_header):
     async def fake_collect_from_chat(
         user_id: str,
         fields: dict,
@@ -104,7 +104,7 @@ def test_collect_from_chat(client, monkeypatch, service_token_header):
 
     response = client.post(
         "/api/v1/profiles/collect-from-chat",
-        headers={**service_token_header, "X-User-ID": "user-123"},
+        headers={**internal_token_header, "X-User-ID": "user-123"},
         json={
             "fields": {"target_degree_level": "master", "gpa": 3.8},
             "chat_id": "chat-1",

@@ -69,14 +69,14 @@ class _FakeFlowProfileService:
         }
 
 
-def test_parse_then_resolve_clarification_flow(client, monkeypatch, service_token_header):
+def test_parse_then_resolve_clarification_flow(client, monkeypatch, internal_token_header):
     fake_service = _FakeFlowProfileService()
     monkeypatch.setattr("app.api.profiles._profile_service", fake_service)
 
     # 1) Simulate parse call from orchestrator.
     parse_resp = client.post(
         "/api/v1/profiles/parse",
-        headers={**service_token_header, "X-User-ID": "user-1"},
+        headers={**internal_token_header, "X-User-ID": "user-1"},
         json={
             "file_name": "cv.pdf",
             "file_content_base64": "aGVsbG8=",
@@ -88,7 +88,7 @@ def test_parse_then_resolve_clarification_flow(client, monkeypatch, service_toke
     profile_id = parse_payload["profile_id"]
 
     # 2) Get clarification queue.
-    clar_resp = client.get(f"/api/v1/profiles/{profile_id}/clarifications", headers=service_token_header)
+    clar_resp = client.get(f"/api/v1/profiles/{profile_id}/clarifications", headers=internal_token_header)
     assert clar_resp.status_code == 200
     clar_data = clar_resp.json()["data"]
     assert clar_data["status"] == "needs_clarification"
@@ -97,7 +97,7 @@ def test_parse_then_resolve_clarification_flow(client, monkeypatch, service_toke
     # 3) Submit clarification answers.
     submit_resp = client.post(
         f"/api/v1/profiles/{profile_id}/clarifications",
-        headers=service_token_header,
+        headers=internal_token_header,
         json={
             "answers": [
                 {"field": "target_degree_level", "value": "master"},
@@ -111,7 +111,7 @@ def test_parse_then_resolve_clarification_flow(client, monkeypatch, service_toke
     assert submit_data["clarification_queue"] == []
 
     # 4) Confirm readiness after submission.
-    clar_resp_after = client.get(f"/api/v1/profiles/{profile_id}/clarifications", headers=service_token_header)
+    clar_resp_after = client.get(f"/api/v1/profiles/{profile_id}/clarifications", headers=internal_token_header)
     assert clar_resp_after.status_code == 200
     clar_data_after = clar_resp_after.json()["data"]
     assert clar_data_after["status"] == "analysis_ready"

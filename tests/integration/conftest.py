@@ -33,7 +33,7 @@ def integration_client():
 
 
 @pytest.fixture
-def service_token_header():
+def internal_token_header():
     """Header value for internal bearer-token authentication."""
     now = datetime.now(timezone.utc)
     token = jwt.encode(

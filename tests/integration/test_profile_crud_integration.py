@@ -31,14 +31,14 @@ def _seed_profile(full_name: str, email: str, gpa: float = 3.5) -> str:
     return profile_id
 
 
-def test_parse_document_and_create_profile(integration_client, cleanup_integration_db, service_token_header):
+def test_parse_document_and_create_profile(integration_client, cleanup_integration_db, internal_token_header):
     """Test retrieving a seeded profile from the database via API."""
     profile_id = _seed_profile("John Doe", "john@example.com", 3.8)
 
     # Retrieve profile via API (should come from database)
     response = integration_client.get(
         f"/api/v1/profiles/{profile_id}",
-        headers=service_token_header,
+        headers=internal_token_header,
     )
 
     assert response.status_code == 200
@@ -48,7 +48,7 @@ def test_parse_document_and_create_profile(integration_client, cleanup_integrati
     assert profile["id"] == profile_id
 
 
-def test_update_profile_in_database(integration_client, cleanup_integration_db, service_token_header):
+def test_update_profile_in_database(integration_client, cleanup_integration_db, internal_token_header):
     """Test updating a profile persists changes to database."""
     profile_id = _seed_profile("Jane Smith", "jane@example.com", 3.6)
 
@@ -62,7 +62,7 @@ def test_update_profile_in_database(integration_client, cleanup_integration_db, 
     response = integration_client.patch(
         f"/api/v1/profiles/{profile_id}",
         json=update_data,
-        headers=service_token_header,
+        headers=internal_token_header,
     )
 
     assert response.status_code == 200
@@ -70,7 +70,7 @@ def test_update_profile_in_database(integration_client, cleanup_integration_db, 
     # Verify update persisted by fetching again
     response = integration_client.get(
         f"/api/v1/profiles/{profile_id}",
-        headers=service_token_header,
+        headers=internal_token_header,
     )
 
     retrieved = response.json()
@@ -80,7 +80,7 @@ def test_update_profile_in_database(integration_client, cleanup_integration_db, 
     assert float(profile["gpa"]) == 3.9
 
 
-def test_list_profiles_from_database(integration_client, cleanup_integration_db, service_token_header):
+def test_list_profiles_from_database(integration_client, cleanup_integration_db, internal_token_header):
     """Test listing profiles returns all profiles from database."""
     # Seed multiple profiles directly in database
     for i in range(3):
@@ -89,7 +89,7 @@ def test_list_profiles_from_database(integration_client, cleanup_integration_db,
     # List profiles
     response = integration_client.get(
         "/api/v1/profiles",
-        headers=service_token_header,
+        headers=internal_token_header,
     )
 
     assert response.status_code == 200

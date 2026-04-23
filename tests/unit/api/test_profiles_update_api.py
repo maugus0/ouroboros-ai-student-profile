@@ -1,7 +1,7 @@
 """Unit tests for profile update API behavior."""
 
 
-def test_patch_profile_merges_updates_into_snapshot_and_recomputes_queue(client, monkeypatch, service_token_header):
+def test_patch_profile_merges_updates_into_snapshot_and_recomputes_queue(client, monkeypatch, internal_token_header):
     captured = {"snapshot": None}
 
     class _StubProfileRepo:
@@ -45,7 +45,7 @@ def test_patch_profile_merges_updates_into_snapshot_and_recomputes_queue(client,
 
     response = client.patch(
         "/api/v1/profiles/p1",
-        headers=service_token_header,
+        headers=internal_token_header,
         json={"target_degree_level": "phd", "gpa": 3.95},
     )
 

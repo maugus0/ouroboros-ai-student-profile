@@ -1,7 +1,7 @@
 """Unit tests for multipart profile upload endpoint."""
 
 
-def test_parse_upload_success(client, monkeypatch, service_token_header):
+def test_parse_upload_success(client, monkeypatch, internal_token_header):
     async def fake_parse_and_create_profile(**kwargs):
         assert kwargs["intent"] == "profile_completion"
         return {
@@ -31,7 +31,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
 
     response = client.post(
         "/api/v1/profiles/parse-upload",
-        headers={**service_token_header, "X-User-ID": "user-1"},
+        headers={**internal_token_header, "X-User-ID": "user-1"},
         data=data,
         files=files,
     )
@@ -45,7 +45,7 @@ def test_parse_upload_success(client, monkeypatch, service_token_header):
     assert payload["data"]["received"]["run_gap_analysis"] is False
 
 
-def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_token_header):
+def test_parse_upload_accepts_optional_user_id(client, monkeypatch, internal_token_header):
     async def fake_parse_and_create_profile(**kwargs):
         assert kwargs["intent"] == "profile_completion"
         return {
@@ -72,7 +72,7 @@ def test_parse_upload_accepts_optional_user_id(client, monkeypatch, service_toke
 
     response = client.post(
         "/api/v1/profiles/parse-upload",
-        headers={**service_token_header, "X-User-ID": "legacy-user-id"},
+        headers={**internal_token_header, "X-User-ID": "legacy-user-id"},
         data=data,
         files=files,
     )
