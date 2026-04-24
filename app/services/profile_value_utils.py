@@ -4,21 +4,33 @@ import re
 from datetime import date, datetime
 from typing import Any, Optional
 
+# Module-level constant to avoid rebuilding on every function call
+FIELD_NAME_ALIASES = {
+    "dob": "date_of_birth",
+    "birth_date": "date_of_birth",
+    "target_degree": "target_degree_level",
+    "current_degree": "current_degree_level",
+    "gpa_highest": "gpa",
+    "highest_gpa": "gpa",
+    "preferred_country": "target_study_country",
+    "target_country": "target_study_country",
+    "country_preference": "target_study_country",
+    "preferred_study_country": "target_study_country",
+    "target_intake": "enrollment_timeline",
+    "intake_timeline": "enrollment_timeline",
+    "planned_intake": "enrollment_timeline",
+    "funding": "funding_source",
+    "field_of_study": "intended_field_of_study",
+    "preferred_field_of_study": "intended_field_of_study",
+}
+
 
 def normalize_field_name(field: Any) -> str:
     if field is None:
         return ""
 
     text = str(field).strip().lower().replace("-", "_").replace(" ", "_")
-    aliases = {
-        "dob": "date_of_birth",
-        "birth_date": "date_of_birth",
-        "target_degree": "target_degree_level",
-        "current_degree": "current_degree_level",
-        "gpa_highest": "gpa",
-        "highest_gpa": "gpa",
-    }
-    return aliases.get(text, text)
+    return FIELD_NAME_ALIASES.get(text, text)
 
 
 def parse_gpa_value(value: Any) -> tuple[Optional[float], Optional[float]]:
