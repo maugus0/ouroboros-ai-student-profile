@@ -17,6 +17,16 @@ def normalize_field_name(field: Any) -> str:
         "current_degree": "current_degree_level",
         "gpa_highest": "gpa",
         "highest_gpa": "gpa",
+        "preferred_country": "target_study_country",
+        "target_country": "target_study_country",
+        "country_preference": "target_study_country",
+        "preferred_study_country": "target_study_country",
+        "target_intake": "enrollment_timeline",
+        "intake_timeline": "enrollment_timeline",
+        "planned_intake": "enrollment_timeline",
+        "funding": "funding_source",
+        "field_of_study": "intended_field_of_study",
+        "preferred_field_of_study": "intended_field_of_study",
     }
     return aliases.get(text, text)
 
