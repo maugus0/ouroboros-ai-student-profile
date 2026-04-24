@@ -8,11 +8,13 @@ def test_normalize_field_name_country_aliases_to_target_study_country():
     assert normalize_field_name("target_country") == "target_study_country"
     assert normalize_field_name("country_preference") == "target_study_country"
     assert normalize_field_name("preferred-study-country") == "target_study_country"
+    assert normalize_field_name("preferred_study_country") == "target_study_country"
 
 
 def test_normalize_field_name_timeline_and_funding_aliases():
     assert normalize_field_name("target_intake") == "enrollment_timeline"
     assert normalize_field_name("planned_intake") == "enrollment_timeline"
+    assert normalize_field_name("intake_timeline") == "enrollment_timeline"
     assert normalize_field_name("funding") == "funding_source"
 
 
